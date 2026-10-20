@@ -64,6 +64,23 @@ como "llevaba a la clave" si el análisis respondía SÍ en esa posición. Las p
 se puntúan: solo cuentan cuántas veces las pensaste y escribiste tu idea. Solo registran los
 ejercicios del modo "con tiempo" (el modo "sin tiempo" no hace preguntas).
 
+**Ayudas para no pasar por alto la jugada y entender la solución:**
+
+- **Barrido** antes de cerrar las candidatas: cuántos jaques, capturas y amenazas hay (sin decir
+  cuáles) y si tus candidatas incluyen alguno de cada tipo; también los del rival.
+- **Pistas graduadas** mientras juegas: qué pregunta responde SÍ → qué pieza mueve → casilla destino.
+- **Puntos ciegos**: si la clave no estaba entre tus candidatas, por qué pudo costarte verla
+  (sacrificio, jugada hacia atrás, tranquila, movimiento largo, caballo, pieza olvidada), con
+  estadísticas acumuladas.
+- **La línea ganadora jugada a jugada**, con los temas detectados en cada jugada (sacrificio,
+  atracción, desviación, ataque doble, clavada…; reglas inspiradas en el etiquetador de
+  [lichess-puzzler](https://github.com/ornicar/lichess-puzzler)) y un botón para reproducirla
+  explicada en el tablero.
+- **Temas de Lichess explicados**, señalando la jugada del ejercicio donde aparece cada uno.
+- Con Stockfish: **las 3 mejores jugadas** (MultiPV) frente a tus candidatas, **defensas
+  alternativas del rival** en cada jugada suya, y **rematar contra Stockfish** desde la posición
+  final para demostrar que sabes convertir la ventaja.
+
 **Modo "sin tiempo"**: intuición (cuenta atrás de 20 s), comprobación de que no te dejas nada, jugar.
 
 ## Estructura
@@ -81,14 +98,12 @@ ejercicios del modo "con tiempo" (el modo "sin tiempo" no hace preguntas).
 
 ## Próximas iteraciones
 
-Ideas pendientes de decidir:
+Ideas sacadas de proyectos de código abierto (ver la conversación del 20/10/2026):
 
-- Detectar candidatas pasadas por alto: barrido de jaques, capturas y amenazas antes de cerrar
-  las candidatas, y "puntos ciegos" (sacrificios, jugadas hacia atrás, jugadas tranquilas…).
-- Comparar tus candidatas con las 3 mejores de Stockfish (MultiPV).
-- Pistas graduadas en lugar de mostrar la solución de golpe.
-- Explicar la línea ganadora jugada a jugada en el tablero, con la evaluación tras cada jugada y
-  las defensas alternativas del rival.
+- Repetición espaciada de los ejercicios fallados (como Listudy o Better Tactics).
+- Panel de puntos fuertes y débiles por tema de Lichess (como el *dashboard* de lila).
+- Gráfica de evaluación de la línea y clasificación tipo "brillante/excelente" (Chesskit, freechess).
+- Tablero chessground (el de Lichess) con flechas dibujables por el usuario y animaciones.
 
 ## Créditos
 

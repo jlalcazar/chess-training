@@ -219,3 +219,27 @@ table.stats-table tr.hardest td { background: color-mix(in srgb, var(--bad) 8%, 
 .mistakes { margin-top: 12px; }
 .mistakes h4 { margin: 0 0 6px; }
 .mistakes li { margin: 6px 0; }
+
+.sweep { border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; margin: 10px 0; }
+.sweep h3 { margin: 0 0 6px; font-size: 1rem; }
+.sweep ul { margin: 0; padding-left: 18px; }
+.sweep li.warn { color: var(--bad); }
+.hint-box { border-left: 4px solid var(--info); padding: 4px 12px; margin: 8px 0; background: color-mix(in srgb, var(--info) 8%, transparent); }
+.hint-box p { margin: 4px 0; }
+.line-view { margin: 12px 0; }
+.line-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; }
+.line-view ol { padding-left: 22px; margin: 6px 0; }
+.line-view li { padding: 3px 6px; border-radius: 4px; cursor: pointer; }
+.line-view li.theirs { color: var(--muted); }
+.line-view li:hover, .line-view li.current { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.themes ul { margin: 4px 0; padding-left: 18px; }
+.themes li { margin: 3px 0; }
+.blind { border-left: 4px solid var(--bad); padding: 4px 12px; }
+.explain { border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 0.9rem; background: var(--surface); }
+.who { display: inline-block; font-size: 0.75rem; font-weight: 700; padding: 0 6px; border-radius: 999px; border: 1px solid currentColor; }
+.who-you { color: var(--good); }
+.who-rival { color: var(--muted); }
+.top-moves { margin: 8px 0; }
+.top-moves ol { margin: 4px 0; padding-left: 22px; }
+.blind-stats { padding-left: 18px; }
+.blind-stats li { margin: 6px 0; }

@@ -64,3 +64,18 @@ test('los ejercicios sin preguntas no cuentan como ejercicios', () => {
   const s = recordExercise(emptyStats(), { answers: {}, keyInCandidates: null });
   assert.equal(s.exercises, 0);
 });
+
+test('puntos ciegos y pistas', () => {
+  let s = emptyStats();
+  s = recordExercise(s, { answers: { mate: yes(true) }, keyInCandidates: false, blind: ['sacrificio', 'atras'], hintsUsed: 2 });
+  s = recordExercise(s, { answers: { mate: yes(true) }, keyInCandidates: true, blind: ['sacrificio'] });
+  const { blindSpots, hints } = summarize(s);
+  assert.deepEqual(blindSpots.map((b) => [b.kind, b.missed, b.seen]), [['atras', 1, 1], ['sacrificio', 1, 2]]);
+  assert.deepEqual(hints, { exercises: 2, used: 2, needed: 1 });
+});
+
+test('estadísticas antiguas sin puntos ciegos se siguen leyendo', () => {
+  const old = { version: 1, exercises: 1, questions: {}, candidates: { asked: 0, keyFound: 0 } };
+  const s = recordExercise(old, { answers: {}, keyInCandidates: true, blind: ['caballo'] });
+  assert.equal(s.blindSpots.caballo.seen, 1);
+});

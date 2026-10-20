@@ -91,3 +91,26 @@ test('winChance y describeAdvantage', async () => {
   assert.equal(describeAdvantage({ cp: -400 }), 'ventaja decisiva para el rival');
   assert.equal(describeAdvantage({ mate: 3 }), 'das mate en 3');
 });
+
+class MultiPvWorker extends FakeWorker {
+  postMessage(cmd) {
+    this.sent.push(cmd);
+    const reply = (line) => queueMicrotask(() => this.onmessage({ data: line }));
+    if (cmd === 'uci') reply('uciok');
+    else if (cmd === 'isready') reply('readyok');
+    else if (cmd.startsWith('go')) {
+      reply('info depth 9 multipv 1 score cp 50 pv e2e4');
+      reply('info depth 10 multipv 1 score cp 40 pv d2d4 d7d5');
+      reply('info depth 10 multipv 2 score cp 30 pv e2e4');
+      reply('info depth 10 multipv 3 score cp 10 pv g1f3');
+      reply('bestmove d2d4');
+    }
+  }
+}
+
+test('MultiPV devuelve las 3 mejores de la última profundidad', async () => {
+  const engine = new StockfishEngine('sf.js', MultiPvWorker);
+  const r = await engine.evaluate('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', { depth: 10, multipv: 3 });
+  assert.deepEqual(r.top.map((t) => [t.pv[0], t.score.cp]), [['d2d4', 40], ['e2e4', 30], ['g1f3', 10]]);
+  assert.ok(engine.worker.sent.includes('setoption name MultiPV value 3'));
+});

@@ -118,23 +118,27 @@ export class StockfishEngine {
   }
 
   /** Evalúa `fen` (opcionalmente solo la jugada `move`). Las búsquedas se encolan. */
-  evaluate(fen, { depth = DEFAULT_DEPTH, move } = {}) {
+  evaluate(fen, { depth = DEFAULT_DEPTH, move, multipv = 1 } = {}) {
     const run = async () => {
       await this.init();
-      let last = null;
+      const lines = new Map();
       const done = this.#waitFor(
         (l) => l.startsWith('bestmove'),
         (l) => {
           const info = parseInfo(l);
-          if (info && info.multipv === 1) last = info;
+          if (info) lines.set(info.multipv, info);
         },
       );
+      this.#send(`setoption name MultiPV value ${multipv}`);
       this.#send(`position fen ${fen}`);
       this.#send(`go depth ${depth}${move ? ` searchmoves ${move}` : ''}`);
       const best = await done;
       const bestMove = best.split(' ')[1];
-      if (!last) return { score: { cp: 0 }, pv: bestMove && bestMove !== '(none)' ? [bestMove] : [], depth: 0 };
-      return { score: last.score, pv: last.pv, depth: last.depth };
+      const last = lines.get(1);
+      // Las mejores `multipv` líneas, ordenadas (solo las de la última profundidad completa).
+      const top = [...lines.values()].filter((x) => x.depth === last?.depth).sort((a, b) => a.multipv - b.multipv).map((x) => ({ score: x.score, pv: x.pv }));
+      if (!last) return { score: { cp: 0 }, pv: bestMove && bestMove !== '(none)' ? [bestMove] : [], depth: 0, top: [] };
+      return { score: last.score, pv: last.pv, depth: last.depth, top };
     };
     const result = this.queue.then(run, run);
     this.queue = result.catch(() => {});
@@ -179,7 +183,7 @@ export async function evaluateMoves(source, fen, moves, { engine, depth = DEFAUL
   const rows = [];
 
   if (source === 'stockfish') {
-    const best = { ...(await engine.evaluate(fen, { depth })), via: 'stockfish' };
+    const best = { ...(await engine.evaluate(fen, { depth, multipv: 3 })), via: 'stockfish' };
     onProgress?.({ best, rows });
     for (const uci of unique) {
       const r = await engine.evaluate(fen, { depth, move: uci });
@@ -194,8 +198,8 @@ export async function evaluateMoves(source, fen, moves, { engine, depth = DEFAUL
   const fromWhite = (s) => (hero === 'w' ? s : negate(s));
   const root = await fetchCloudEval(fen, { multiPv: 5 }, fetchImpl);
   const rootPvs = root ? root.pvs.map((p) => ({ ...p, score: fromWhite(p.score) })) : [];
-  let best = rootPvs[0] ? { score: rootPvs[0].score, pv: rootPvs[0].pv, depth: root.depth, via: 'cloud' } : null;
-  if (!best && engine) best = { ...(await engine.evaluate(fen, { depth })), via: 'stockfish' };
+  let best = rootPvs[0] ? { score: rootPvs[0].score, pv: rootPvs[0].pv, depth: root.depth, via: 'cloud', top: rootPvs.slice(0, 3) } : null;
+  if (!best && engine) best = { ...(await engine.evaluate(fen, { depth, multipv: 3 })), via: 'stockfish' };
   onProgress?.({ best, rows });
   for (const uci of unique) {
     const known = rootPvs.find((p) => p.pv[0] === uci);
@@ -263,4 +267,10 @@ export function describeAdvantage(score) {
   if (a < 150) return `ligera ventaja ${who}`;
   if (a < 300) return `ventaja clara ${who}`;
   return `ventaja decisiva ${who}`;
+}
+
+/** La mejor jugada (UCI) para jugar contra el motor, con una búsqueda corta. */
+export async function engineMove(engine, fen, { depth = 12 } = {}) {
+  const r = await engine.evaluate(fen, { depth });
+  return r.pv[0] ?? null;
 }

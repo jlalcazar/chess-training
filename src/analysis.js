@@ -505,3 +505,192 @@ export function describeIdea(idea, { moves = true } = {}) {
   const steps = idea.line.map((s) => (s.notes.length ? `${s.san} (${s.notes.slice(0, 2).join(', ')})` : s.san)).join(' ');
   return `${steps} → ${result}`;
 }
+
+// ------------------------------------- Barrido de jaques, capturas y amenazas
+
+/**
+ * Las jugadas "forzantes" de quien mueve en `fen`: jaques, capturas y amenazas
+ * (la pieza movida ataca algo indefenso o de más valor). Es el barrido que
+ * conviene hacer antes de cerrar la lista de candidatas.
+ */
+export function forcingSweep(fen) {
+  const chess = load(fen);
+  if (!chess) return { checks: [], captures: [], threats: [] };
+  const color = chess.turn();
+  const enemy = other(color);
+  const checks = [];
+  const captures = [];
+  const threats = [];
+  for (const m of chess.moves({ verbose: true })) {
+    if (m.san.includes('+') || m.san.includes('#')) checks.push(m);
+    if (m.captured) captures.push(m);
+    if (m.san.includes('+') || m.captured) continue;
+    chess.move(m);
+    const after = load(withTurn(chess.fen(), color));
+    chess.undo();
+    if (!after) continue;
+    const hits = after
+      .moves({ verbose: true, square: m.to })
+      .filter((x) => x.captured && x.captured !== 'k')
+      .filter((x) => VALUES[x.captured] > VALUES[m.piece] || after.attackers(x.to, enemy).length === 0);
+    if (hits.length) threats.push({ ...m, targets: hits.map((x) => x.to) });
+  }
+  return { checks, captures, threats };
+}
+
+// ------------------------------------------------------------ Puntos ciegos
+
+export const BLIND_SPOTS = {
+  sacrificio: 'un sacrificio (la pieza va a una casilla donde la pueden capturar)',
+  atras: 'una jugada hacia atrás',
+  tranquila: 'una jugada tranquila (sin jaque, captura ni amenaza directa)',
+  largo: 'un movimiento largo de alfil, torre o dama (4 casillas o más)',
+  caballo: 'una jugada de caballo',
+  piezaOlvidada: 'una pieza que ninguna de tus candidatas movía',
+};
+
+/**
+ * Por qué una jugada puede ser difícil de ver. `candidates` (UCI) permite
+ * detectar si movía una pieza que no habías considerado.
+ */
+export function blindSpots(fen, uci, candidates = []) {
+  const chess = load(fen);
+  if (!chess) return [];
+  const color = chess.turn();
+  let m;
+  try {
+    m = chess.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+  } catch {
+    return [];
+  }
+  const out = [];
+  const enemyAttackers = chess.attackers(m.to, other(color));
+  const ownDefenders = chess.attackers(m.to, color);
+  const cheapestAttacker = Math.min(...enemyAttackers.map((s) => VALUES[chess.get(s).type]));
+  const gain = m.captured ? VALUES[m.captured] : 0;
+  if (m.piece !== 'k' && enemyAttackers.length && (!ownDefenders.length || cheapestAttacker < VALUES[m.piece]) && VALUES[m.piece] - gain >= 2) {
+    out.push('sacrificio');
+  }
+  const [, fromRank] = coords(m.from);
+  const [, toRank] = coords(m.to);
+  if (m.piece !== 'p' && (toRank - fromRank) * (color === 'w' ? 1 : -1) < 0) out.push('atras');
+  if (!m.captured && !m.san.includes('+') && !m.promotion) {
+    const sweep = forcingSweep(fen);
+    if (!sweep.threats.some((t) => t.from === m.from && t.to === m.to)) out.push('tranquila');
+  }
+  const [ff, fr] = coords(m.from);
+  const [tf, tr] = coords(m.to);
+  if (['b', 'r', 'q'].includes(m.piece) && Math.max(Math.abs(tf - ff), Math.abs(tr - fr)) >= 4) out.push('largo');
+  if (m.piece === 'n') out.push('caballo');
+  if (candidates.length && !candidates.some((c) => c.slice(0, 2) === m.from)) out.push('piezaOlvidada');
+  return out;
+}
+
+// --------------------------------------- Explicación de la línea ganadora
+
+export const MOVE_THEMES = {
+  sacrificio: { name: 'Sacrificio', text: 'entregas material a cambio de algo mejor' },
+  atraccion: { name: 'Atracción', text: 'obligas a una pieza rival (a menudo el rey) a ir a una casilla mala' },
+  desviacion: { name: 'Desviación', text: 'apartas a un defensor de su tarea' },
+  eliminarDefensor: { name: 'Eliminar al defensor', text: 'capturas la pieza que defendía otra' },
+  ataqueDoble: { name: 'Ataque doble', text: 'una pieza ataca dos objetivos a la vez' },
+  clavada: { name: 'Clavada', text: 'una pieza rival no puede moverse sin exponer otra más valiosa' },
+  enfilada: { name: 'Enfilada', text: 'atacas una pieza valiosa que, al apartarse, deja otra detrás' },
+  jaqueDoble: { name: 'Jaque doble', text: 'dos piezas dan jaque a la vez: solo vale mover el rey' },
+  descubierta: { name: 'Ataque a la descubierta', text: 'al mover una pieza, otra que estaba detrás ataca' },
+  tranquila: { name: 'Jugada tranquila', text: 'sin jaque ni captura, pero prepara una amenaza imparable' },
+  coronacion: { name: 'Coronación', text: 'un peón llega a la última fila' },
+  mate: { name: 'Mate', text: 'el rey rival no tiene escapatoria' },
+};
+
+function kingSquare(chess, color) {
+  return allPieces(chess).find((p) => p.type === 'k' && p.color === color)?.square;
+}
+
+/**
+ * Explica cada jugada de una línea (UCI) desde `fen`, inspirándose en el
+ * etiquetador de temas de lichess-puzzler: qué tema aparece en cada jugada
+ * propia y cuántas respuestas tenía el rival en cada jugada suya.
+ */
+export function explainLine(fen, ucis) {
+  const chess = load(fen);
+  if (!chess) return [];
+  const hero = chess.turn();
+  const enemy = other(hero);
+  const base = materialFor(chess, hero);
+  const plies = [];
+  const moves = [];
+  for (const uci of ucis) {
+    const before = chess.fen();
+    const legal = chess.moves().length;
+    let m;
+    try {
+      m = chess.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+    } catch {
+      break;
+    }
+    moves.push({ m, before, after: chess.fen() });
+    plies.push({ san: m.san, uci, by: m.color === hero ? 'you' : 'rival', fenBefore: before, fenAfter: chess.fen(), legalReplies: legal, themes: [], notes: [], material: materialFor(chess, hero) - base });
+  }
+  for (let i = 0; i < plies.length; i++) {
+    const p = plies[i];
+    const { m, before, after } = moves[i];
+    if (p.by !== 'you') {
+      p.forced = p.legalReplies === 1;
+      continue;
+    }
+    const pos = load(after);
+    p.notes = describeStep(before, p.uci);
+    const t = new Set();
+    if (pos.isCheckmate()) t.add('mate');
+    if (m.promotion) t.add('coronacion');
+    // Jaque doble y descubierto.
+    const ks = kingSquare(pos, enemy);
+    if (ks && pos.inCheck()) {
+      const checkers = pos.attackers(ks, hero);
+      if (checkers.length > 1) t.add('jaqueDoble');
+      else if (!checkers.includes(m.to)) t.add('descubierta');
+    }
+    // Sacrificio: tras la respuesta del rival pierdes 2+ puntos respecto a antes de tu jugada.
+    const reply = plies[i + 1];
+    const materialBefore = i > 0 ? plies[i - 1].material : 0;
+    if (reply && reply.material - materialBefore <= -2 && !m.promotion) t.add('sacrificio');
+    // Atracción: el rival captura en tu casilla con rey/dama/torre y luego atacas esa casilla.
+    if (reply && reply.uci.slice(2, 4) === m.to) {
+      const attracted = moves[i + 1].m.piece;
+      const next = moves[i + 2];
+      if (['k', 'q', 'r'].includes(attracted) && next && load(next.after).attackers(m.to, hero).length) t.add('atraccion');
+    }
+    // Eliminar al defensor: capturas algo que defendía la pieza que capturas en tu siguiente jugada.
+    const nextMine = moves[i + 2];
+    if (m.captured && nextMine?.m.captured) {
+      const prev = load(before);
+      if (prev.attackers(nextMine.m.to, enemy).includes(m.to)) t.add('eliminarDefensor');
+    }
+    // Desviación: el rival tuvo que dejar de defender la casilla donde capturas después.
+    if (i >= 2 && m.captured) {
+      const theirMove = moves[i - 1].m;
+      const wasDefended = load(moves[i - 2].after).attackers(m.to, enemy).includes(theirMove.from);
+      if (wasDefended && theirMove.to !== m.to && theirMove.piece !== 'k') t.add('desviacion');
+    }
+    for (const note of p.notes) {
+      if (note.startsWith('ataque doble')) t.add('ataqueDoble');
+      if (note.startsWith('clavada')) t.add('clavada');
+      if (note.startsWith('enfilada')) t.add('enfilada');
+    }
+    if (!m.captured && !pos.inCheck() && !m.promotion && !p.notes.length && i < plies.length - 1) t.add('tranquila');
+    p.themes = [...t];
+  }
+  return plies;
+}
+
+/** Frase corta para una jugada explicada. */
+export function narratePly(p) {
+  if (p.by === 'rival') {
+    return p.forced ? `${p.san}: el rival no tiene otra jugada.` : `${p.san}: el rival responde (tenía ${p.legalReplies} jugadas legales).`;
+  }
+  const themes = p.themes.map((t) => `${MOVE_THEMES[t].name.toLowerCase()}: ${MOVE_THEMES[t].text}`);
+  const notes = p.notes.filter((n) => n !== 'sacrificio');
+  const parts = [...themes, ...notes.filter((n) => !themes.some((t) => t.startsWith(n.split(' ')[0])))];
+  return `${p.san}: ${parts.length ? parts.join('; ') : 'mejora la posición'}.`;
+}

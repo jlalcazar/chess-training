@@ -156,3 +156,38 @@ export function parsePuzzle(data) {
     gameUrl: `https://lichess.org/${game.id}`,
   };
 }
+
+/**
+ * Definiciones breves de los temas de Lichess. `move` enlaza con el tema que
+ * explainLine detecta jugada a jugada (para señalar dónde aparece).
+ */
+export const THEME_HELP = {
+  fork: { move: 'ataqueDoble', text: 'una pieza ataca dos objetivos a la vez y el rival solo puede salvar uno.' },
+  pin: { move: 'clavada', text: 'una pieza no puede moverse porque dejaría expuesta otra más valiosa detrás.' },
+  skewer: { move: 'enfilada', text: 'se ataca una pieza valiosa que, al apartarse, deja otra detrás.' },
+  sacrifice: { move: 'sacrificio', text: 'se entrega material a cambio de un ataque, un mate o recuperar más después.' },
+  attraction: { move: 'atraccion', text: 'se obliga a una pieza rival (a menudo el rey) a ir a una casilla donde sufre.' },
+  deflection: { move: 'desviacion', text: 'se aparta a un defensor de la casilla o pieza que protegía.' },
+  capturingDefender: { move: 'eliminarDefensor', text: 'se captura la pieza que defendía a otra, que queda indefensa.' },
+  discoveredAttack: { move: 'descubierta', text: 'al mover una pieza, otra que estaba detrás pasa a atacar.' },
+  doubleCheck: { move: 'jaqueDoble', text: 'dos piezas dan jaque a la vez: la única defensa es mover el rey.' },
+  quietMove: { move: 'tranquila', text: 'una jugada sin jaque ni captura que crea una amenaza imparable.' },
+  promotion: { move: 'coronacion', text: 'un peón llega a la última fila y se convierte en otra pieza.' },
+  hangingPiece: { text: 'una pieza rival estaba sin defensa y se puede capturar gratis.' },
+  trappedPiece: { text: 'una pieza rival no tiene casillas seguras a las que huir.' },
+  backRankMate: { move: 'mate', text: 'mate en la primera fila, con el rey encerrado por sus propios peones.' },
+  smotheredMate: { move: 'mate', text: 'mate de caballo a un rey rodeado (ahogado) por sus propias piezas.' },
+  exposedKing: { text: 'el rey rival tiene poca protección y se puede atacar.' },
+  kingsideAttack: { text: 'ataque contra el rey enrocado en el flanco de rey.' },
+  intermezzo: { text: 'en lugar de la jugada esperada, una jugada intermedia más fuerte (a menudo un jaque).' },
+  xRayAttack: { text: 'una pieza ataca o defiende "a través" de otra.' },
+  interference: { text: 'se coloca una pieza entre dos piezas rivales para cortar su conexión.' },
+  clearance: { text: 'se despeja una casilla o línea para que otra pieza la aproveche.' },
+  advancedPawn: { text: 'un peón muy avanzado es parte clave de la idea.' },
+  defensiveMove: { text: 'una jugada precisa para evitar perder material o ventaja.' },
+  zugzwang: { text: 'el rival está obligado a mover y cualquier jugada empeora su posición.' },
+  mateIn1: { move: 'mate', text: 'hay mate en una jugada.' },
+  mateIn2: { move: 'mate', text: 'mate forzado en dos jugadas.' },
+  mateIn3: { move: 'mate', text: 'mate forzado en tres jugadas.' },
+  mateIn4: { move: 'mate', text: 'mate forzado en cuatro jugadas.' },
+};
