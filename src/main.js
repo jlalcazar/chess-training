@@ -1,6 +1,7 @@
 import './styles.css';
 import { Board } from './board.js';
 import { COLOR_NAMES, evaluateMove, load } from './analysis.js';
+import { DEFAULT_DEPTH, ENGINE_SOURCES, StockfishEngine, evaluateMoves, formatScore, pvToSan, toCp, verdict } from './engine.js';
 import { DIFFICULTIES, THEMES, fetchDailyPuzzle, fetchNextPuzzle, fetchPuzzleById, themeName } from './lichess.js';
 import {
   BREATHING,
@@ -56,7 +57,7 @@ const uciToMove = (uci) => ({ from: uci.slice(0, 2), to: uci.slice(2, 4), promot
 
 // ---------------------------------------------------------------------- estado
 
-const settings = { level: 'casual', angle: 'mix', difficulty: 'normal', mode: 'tiempo', breathing: true, ...storage.get('settings', {}) };
+const settings = { level: 'casual', angle: 'mix', difficulty: 'normal', mode: 'tiempo', breathing: true, engineOn: false, engineSource: 'stockfish', ...storage.get('settings', {}) };
 let state = null;
 let timer = null;
 
@@ -128,6 +129,7 @@ function renderSettings() {
 
 async function loadPuzzle(source) {
   stopTimer();
+  cancelEngine();
   panel.replaceChildren(h('p', { class: 'muted' }, 'Pidiendo un ejercicio a Lichess…'));
   try {
     const puzzle =
@@ -200,6 +202,11 @@ function syncBoard() {
     board.setArrows([]);
   }
   if (!['tactica', 'estrategia'].includes(step)) board.setMarks({});
+  if (step === 'resumen' && state.engineFocus) {
+    const { uci, tone } = state.engineFocus;
+    board.setPosition(state.puzzle.fen, { lastMove: state.puzzle.lastMove });
+    board.setArrows([{ from: uci.slice(0, 2), to: uci.slice(2, 4), tone }]);
+  }
 }
 
 // --------------------------------------------------------------- paso: calma
@@ -558,6 +565,7 @@ function finish(solved) {
   history.unshift({ id: puzzle.id, rating: puzzle.rating, solved: state.solved, mistakes: state.mistakes.length, level: settings.level, mode: settings.mode, date: new Date().toISOString() });
   storage.set('history', history.slice(0, 200));
   go('resumen');
+  if (settings.engineOn) startEngine();
 }
 
 function resumen() {
@@ -584,8 +592,143 @@ function resumen() {
     state.firstImpression ? h('p', {}, h('strong', {}, 'Tu primera impresión: '), state.firstImpression) : null,
     h('p', { class: 'muted small' }, `Dificultad Lichess: ${puzzle.rating} · Has resuelto ${solvedCount} de ${history.length} ejercicios en este navegador.`),
     h('p', {}, h('a', { href: puzzle.puzzleUrl, target: '_blank', rel: 'noopener' }, 'Ver en Lichess'), ' · ', h('a', { href: puzzle.gameUrl, target: '_blank', rel: 'noopener' }, 'Partida original')),
+    engineSection(),
     h('div', { class: 'actions' }, h('button', { class: 'primary', onClick: () => loadPuzzle() }, 'Siguiente ejercicio')),
   );
+}
+
+// ------------------------------------------- evaluación con motor (repaso)
+
+let engine = null;
+let engineRun = 0;
+
+function saveSettings() {
+  storage.set('settings', settings);
+}
+
+function cancelEngine() {
+  engineRun++;
+  engine?.terminate();
+  engine = null;
+}
+
+/** Jugadas a evaluar con su origen: la clave, tus candidatas, tu intuición y tus fallos. */
+function movesToEvaluate() {
+  const { puzzle } = state;
+  const origin = new Map();
+  const add = (uci, label) => uci && origin.set(uci, [...(origin.get(uci) ?? []), label]);
+  add(puzzle.solution[0], 'solución');
+  for (const c of state.candidates) add(c.uci, 'candidata');
+  add(state.intuition?.uci, 'intuición');
+  for (const m of state.mistakes) if (m.ply === 0) add(m.ev.uci, 'jugada fallida');
+  return origin;
+}
+
+async function startEngine() {
+  const run = ++engineRun;
+  const source = settings.engineSource;
+  const { puzzle } = state;
+  const origin = movesToEvaluate();
+  state.engine = { status: 'running', source, best: null, rows: [], origin };
+  state.engineFocus = null;
+  render();
+  try {
+    if (source === 'stockfish') engine ??= new StockfishEngine();
+    const result = await evaluateMoves(source, puzzle.fen, [...origin.keys()], {
+      engine,
+      onProgress: ({ best, rows }) => {
+        if (run !== engineRun) return;
+        Object.assign(state.engine, { best, rows: [...rows] });
+        render();
+      },
+    });
+    if (run !== engineRun) return;
+    Object.assign(state.engine, { status: 'done', best: result.best, rows: result.rows });
+    log('engine', state.engine);
+  } catch (err) {
+    if (run !== engineRun) return;
+    console.error(err);
+    Object.assign(state.engine, { status: 'error', error: err.message });
+  }
+  render();
+}
+
+function toggleEngine() {
+  settings.engineOn = !settings.engineOn;
+  saveSettings();
+  if (settings.engineOn) {
+    startEngine();
+  } else {
+    cancelEngine();
+    state.engine = null;
+    state.engineFocus = null;
+    render();
+  }
+}
+
+function engineSection() {
+  const on = settings.engineOn;
+  const controls = h('div', { class: 'actions' },
+    h('button', { class: on ? '' : 'primary', 'aria-pressed': String(on), onClick: toggleEngine }, on ? 'Desactivar motor' : 'Activar motor'),
+    h('select', {
+      'aria-label': 'Fuente de evaluación',
+      onChange: (e) => {
+        settings.engineSource = e.target.value;
+        saveSettings();
+        if (settings.engineOn) {
+          cancelEngine();
+          startEngine();
+        }
+      },
+    }, Object.entries(ENGINE_SOURCES).map(([value, label]) => h('option', { value, selected: settings.engineSource === value }, label))),
+  );
+  const box = h('div', { class: 'engine' }, h('h3', {}, 'Evaluación con motor'), controls);
+  if (!on) {
+    box.append(h('p', { class: 'muted small' }, 'Compara tus candidatas con una evaluación real. Solo está disponible al terminar el ejercicio, para no condicionar tu proceso de pensamiento.'));
+    return box;
+  }
+  const ev = state.engine;
+  if (!ev) return box;
+  if (ev.status === 'error') {
+    box.append(h('p', { class: 'error' }, ev.error), h('button', { onClick: startEngine }, 'Reintentar'));
+    return box;
+  }
+  const { puzzle } = state;
+  if (ev.best) {
+    const san = pvToSan(puzzle.fen, ev.best.pv);
+    box.append(h('p', {}, h('strong', {}, 'Mejor según el motor: '), `${san[0] ?? '—'} (${formatScore(ev.best.score)}) `, h('span', { class: 'muted' }, san.join(' '))));
+  } else if (ev.source === 'cloud' && ev.status !== 'running') {
+    box.append(h('p', { class: 'muted small' }, 'La nube de Lichess no tiene esta posición analizada. Prueba con Stockfish.'));
+  }
+  const available = ev.rows.filter((r) => r.available);
+  const reference = ev.best ? toCp(ev.best.score) : Math.max(...available.map((r) => toCp(r.score)));
+  const rows = [...ev.rows].sort((a, b) => (b.available ? toCp(b.score) : -Infinity) - (a.available ? toCp(a.score) : -Infinity));
+  if (rows.length) {
+    box.append(h('table', { class: 'engine-table' },
+      h('thead', {}, h('tr', {}, h('th', {}, 'Jugada'), h('th', {}, 'Eval.'), h('th', {}, 'Veredicto'), h('th', {}, 'Línea'))),
+      h('tbody', {}, rows.map((r) => {
+        const san = pvToSan(puzzle.fen, r.pv);
+        const v = r.available ? verdict(Math.max(0, reference - toCp(r.score)), r.score) : null;
+        const focus = () => {
+          state.engineFocus = { uci: r.uci, tone: v?.tone ?? 'info' };
+          syncBoard();
+        };
+        return h('tr', { class: state.engineFocus?.uci === r.uci ? 'focus' : '', onClick: focus },
+          h('td', {}, h('strong', {}, san[0] ?? r.uci), h('div', { class: 'muted small' }, ev.origin.get(r.uci)?.join(', '))),
+          h('td', { class: 'score' }, r.available ? formatScore(r.score) : '—'),
+          h('td', {}, v ? h('span', { class: `badge tone-${v.tone}` }, v.label) : h('span', { class: 'muted small' }, 'sin datos en la nube')),
+          h('td', { class: 'muted small' }, san.slice(1).join(' ')),
+        );
+      })),
+    ));
+  }
+  if (ev.status === 'running') {
+    const total = ev.origin.size;
+    box.append(h('p', { class: 'muted small' }, `Analizando… ${ev.rows.length}/${total}${ev.source === 'stockfish' ? ` (profundidad ${DEFAULT_DEPTH})` : ''}`));
+  } else {
+    box.append(h('p', { class: 'muted small' }, 'Pulsa una jugada para verla en el tablero. Evaluación desde tu punto de vista: positivo es bueno para ti.'));
+  }
+  return box;
 }
 
 function questionText(id) {

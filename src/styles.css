@@ -166,3 +166,15 @@ footer { margin-top: 24px; }
 select { max-width: 100%; min-width: 0; }
 .settings label { min-width: 0; max-width: 100%; }
 @media (max-width: 860px) { main { grid-template-columns: minmax(0, 1fr); } }
+
+.engine { margin-top: 16px; padding-top: 8px; border-top: 1px solid var(--border); }
+.engine select { max-width: 100%; }
+table.engine-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+table.engine-table th, table.engine-table td { border-bottom: 1px solid var(--border); padding: 6px; text-align: left; vertical-align: top; }
+table.engine-table tbody tr { cursor: pointer; }
+table.engine-table tbody tr:hover, table.engine-table tr.focus { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+table.engine-table td.score { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+.badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 0.8rem; font-weight: 600; border: 1px solid currentColor; }
+.badge.tone-good { color: var(--good); }
+.badge.tone-bad { color: var(--bad); }
+.badge.tone-info { color: var(--info); }

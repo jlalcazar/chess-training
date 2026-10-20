@@ -5,3 +5,6 @@ dist/
 # Documento de referencia privado: no subir nunca al repositorio
 Resumen_Ajedrez.md
 *Resumen_Ajedrez*.md
+
+# Copiado desde node_modules por scripts/copy-stockfish.mjs
+public/stockfish/
