@@ -51,6 +51,13 @@ Parámetros de URL útiles para depurar:
 
    Con el motor activo, la navegación muestra también la evaluación de la posición del tablero.
 
+**Estadísticas por pregunta** (botón "Estadísticas"): al terminar cada ejercicio se guarda, en
+tu navegador, cómo respondiste a cada pregunta: aciertos, "no lo viste" (había algo y dijiste que
+no), falsas alarmas, "no lo sé" y, sobre todo, cuántas veces la pregunta llevaba a la jugada clave
+y no la viste. Con eso señala la pregunta que más te cuesta (a partir de 3 respuestas) y el
+porcentaje de ejercicios en que la clave estaba entre tus candidatas. Las preguntas abiertas no
+se puntúan: solo cuentan cuántas veces las pensaste y escribiste tu idea.
+
 **Modo "sin tiempo"**: intuición (cuenta atrás de 20 s), comprobación de que no te dejas nada, jugar.
 
 ## Estructura
@@ -62,6 +69,7 @@ Parámetros de URL útiles para depurar:
 | `src/method.js` | El método: niveles, preguntas y su respuesta calculada sobre la posición. |
 | `src/engine.js` | Evaluación real: Stockfish WASM en un Web Worker (UCI, `searchmoves` por candidata) y la nube de Lichess. |
 | `scripts/copy-stockfish.mjs` | Copia el motor de `node_modules/stockfish` a `public/stockfish/` (se ejecuta al instalar, en `dev` y en `build`). |
+| `src/stats.js` | Estadísticas por pregunta: registro por ejercicio y resumen ordenado por dificultad. |
 | `src/board.js` | Tablero DOM con marcas y flechas. |
 | `src/main.js` | Flujo de pasos e interfaz. |
 

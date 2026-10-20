@@ -3,6 +3,7 @@ import { Chess } from 'chess.js';
 import { Board } from './board.js';
 import { COLOR_NAMES, describeIdea, describeLine, evaluateMove, findForcingIdea, load } from './analysis.js';
 import { DEFAULT_DEPTH, ENGINE_SOURCES, StockfishEngine, evaluateMoves, evaluatePosition, formatScore, pvToSan, toCp, verdict } from './engine.js';
+import { emptyStats, recordExercise, summarize } from './stats.js';
 import { DIFFICULTIES, THEMES, fetchDailyPuzzle, fetchNextPuzzle, fetchPuzzleById, themeName } from './lichess.js';
 import {
   BREATHING,
@@ -125,6 +126,7 @@ function renderSettings() {
     ),
     h('button', { class: 'primary', onClick: () => loadPuzzle() }, 'Nuevo ejercicio'),
     h('button', { onClick: () => loadPuzzle('daily') }, 'Puzzle del día'),
+    h('button', { onClick: openStats }, 'Estadísticas'),
   );
 }
 
@@ -259,7 +261,7 @@ function renderBoardNav() {
       btn('⏭', 'Final', positions.length - 1, index === positions.length - 1),
     ),
     h('div', { class: 'nav-label' }, h('strong', {}, pos.label), h('span', { class: 'muted' }, where)),
-    settings.engineOn ? h('div', { class: 'nav-eval muted small' }, positionEvalText(ev, pos.fen)) : null,
+    ...(settings.engineOn ? [h('div', { class: 'nav-eval muted small' }, positionEvalText(ev, pos.fen))] : []),
   );
 }
 
@@ -681,6 +683,15 @@ function finish(solved) {
   const history = storage.get('history', []);
   history.unshift({ id: puzzle.id, rating: puzzle.rating, solved: state.solved, mistakes: state.mistakes.length, level: settings.level, mode: settings.mode, date: new Date().toISOString() });
   storage.set('history', history.slice(0, 200));
+  // Estadísticas por pregunta: qué preguntas señalaban la jugada clave.
+  const key = evaluateWithIdea(puzzle.fen, uciToMove(puzzle.solution[0]));
+  const keyUci = key?.uci;
+  storage.set('stats', recordExercise(storage.get('stats', emptyStats()), {
+    answers: state.answers,
+    notes: state.notes,
+    keyQuestions: key ? [...new Set(key.tags.map((t) => t.q))] : [],
+    keyInCandidates: settings.mode === 'tiempo' ? state.candidates.some((c) => c.uci === keyUci) : null,
+  }));
   state.review = buildReview(puzzle);
   go('resumen');
   if (settings.engineOn) startEngine();
@@ -857,6 +868,85 @@ function engineSection() {
 
 function questionText(id) {
   return [...state.plan.tactical, ...state.plan.strategic].find((q) => q.id === id)?.text ?? id;
+}
+
+// ------------------------------------------------------------ estadísticas
+
+const pct = (x) => (x == null ? '—' : `${Math.round(x * 100)}%`);
+const times = (n) => `${n} ${n === 1 ? 'vez' : 'veces'}`;
+
+function bar(value, tone) {
+  return h('div', { class: 'bar' }, h('div', { class: `bar-fill tone-${tone}`, style: `width: ${Math.round((value ?? 0) * 100)}%` }));
+}
+
+function statsView() {
+  const { rows, hardest, exercises, candidates } = summarize(storage.get('stats', emptyStats()));
+  if (!rows.length) {
+    return h('div', {}, h('p', {}, 'Todavía no hay datos. Termina algún ejercicio en el modo "con tiempo" respondiendo a las preguntas.'));
+  }
+  const closed = rows.filter((r) => !r.open);
+  const open = rows.filter((r) => r.open);
+  return h('div', {},
+    h('p', { class: 'muted small' }, `${exercises} ${exercises === 1 ? 'ejercicio terminado' : 'ejercicios terminados'} en este navegador.`),
+    hardest
+      ? h('div', { class: 'callout' },
+          h('strong', {}, 'Lo que más te cuesta: '), hardest.text,
+          h('div', { class: 'small' },
+            hardest.keyMissed ? `En ${hardest.keyMissed} de ${hardest.key} ejercicios esta pregunta llevaba a la jugada clave y no la viste. ` : '',
+            hardest.missed ? `${times(hardest.missed)} había algo y respondiste que no. ` : '',
+            hardest.falseAlarm ? `${hardest.falseAlarm} ${hardest.falseAlarm === 1 ? 'falsa alarma' : 'falsas alarmas'}. ` : '',
+            hardest.unsure ? `${hardest.unsure} "no lo sé".` : ''))
+      : h('p', { class: 'muted small' }, 'Responde al menos 3 veces cada pregunta para saber cuál te cuesta más.'),
+    candidates.asked
+      ? h('p', {}, h('strong', {}, 'Técnica de candidatas: '), `la jugada clave estaba entre tus candidatas en ${candidates.keyFound} de ${candidates.asked} ejercicios (${pct(candidates.keyFound / candidates.asked)}).`)
+      : null,
+    h('h3', {}, 'Preguntas de sí o no'),
+    h('div', { class: 'table-scroll' }, h('table', { class: 'stats-table' },
+      h('thead', {}, h('tr', {},
+        h('th', {}, 'Pregunta'), h('th', {}, 'Veces'), h('th', {}, 'Aciertos'),
+        h('th', { title: 'Había algo y respondiste que no' }, 'No lo viste'),
+        h('th', { title: 'Respondiste que sí y no había nada' }, 'Falsa alarma'),
+        h('th', {}, 'No lo sé'),
+        h('th', { title: 'Ejercicios en los que la pregunta llevaba a la jugada clave y no respondiste que sí' }, 'Clave no vista'),
+      )),
+      h('tbody', {}, closed.map((r) => h('tr', { class: hardest?.id === r.id ? 'hardest' : '' },
+        h('td', {}, r.text, h('div', { class: 'muted small' }, r.group + (r.enough ? '' : ' · pocos datos'))),
+        h('td', { class: 'num' }, String(r.asked)),
+        h('td', { class: 'num' }, pct(r.accuracy), bar(r.accuracy, r.accuracy >= 0.75 ? 'good' : r.accuracy >= 0.5 ? 'info' : 'bad')),
+        h('td', { class: 'num' }, String(r.missed)),
+        h('td', { class: 'num' }, String(r.falseAlarm)),
+        h('td', { class: 'num' }, String(r.unsure)),
+        h('td', { class: 'num' }, r.key ? `${r.keyMissed}/${r.key}` : '—'),
+      ))),
+    )),
+    open.length ? h('h3', {}, 'Preguntas abiertas') : null,
+    open.length
+      ? h('ul', { class: 'open-stats' }, open.map((r) => h('li', {}, `${r.text} `, h('span', { class: 'muted small' }, `pensada ${times(r.asked)}, con idea escrita ${times(r.withIdea)}${r.key ? ` · señalaba la clave en ${r.key}` : ''}`))))
+      : null,
+  );
+}
+
+function openStats() {
+  let dialog = $('#stats-dialog');
+  if (!dialog) {
+    dialog = h('dialog', { id: 'stats-dialog', class: 'stats-dialog' });
+    document.body.append(dialog);
+  }
+  const close = () => dialog.close();
+  dialog.replaceChildren(
+    h('div', { class: 'dialog-head' }, h('h2', {}, 'Estadísticas por pregunta'), h('button', { class: 'link', onClick: close, 'aria-label': 'Cerrar' }, 'Cerrar')),
+    statsView(),
+    h('div', { class: 'actions' },
+      h('button', {
+        onClick: () => {
+          if (!confirm('¿Borrar todas las estadísticas por pregunta?')) return;
+          storage.set('stats', emptyStats());
+          openStats();
+        },
+      }, 'Borrar estadísticas'),
+    ),
+  );
+  if (!dialog.open) dialog.showModal();
 }
 
 // ------------------------------------------------------------------ inicio

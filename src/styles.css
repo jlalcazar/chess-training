@@ -186,3 +186,21 @@ table.engine-table td.score { font-variant-numeric: tabular-nums; font-weight: 6
 .nav-buttons button:disabled { opacity: 0.4; cursor: default; }
 .nav-label { text-align: center; }
 .nav-eval { text-align: center; }
+
+.stats-dialog { width: min(900px, calc(100vw - 32px)); max-height: calc(100vh - 48px); border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); padding: 16px 20px; }
+.stats-dialog::backdrop { background: rgb(0 0 0 / 0.4); }
+.dialog-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.dialog-head h2 { margin: 0; font-size: 1.2rem; }
+.callout { border-left: 4px solid var(--bad); background: color-mix(in srgb, var(--bad) 8%, transparent); padding: 8px 12px; border-radius: 4px; margin: 8px 0 12px; }
+.table-scroll { overflow-x: auto; }
+table.stats-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+table.stats-table th, table.stats-table td { border-bottom: 1px solid var(--border); padding: 6px; text-align: left; vertical-align: top; }
+table.stats-table th { font-size: 0.8rem; color: var(--muted); }
+table.stats-table td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+table.stats-table tr.hardest td { background: color-mix(in srgb, var(--bad) 8%, transparent); }
+.bar { height: 6px; background: var(--border); border-radius: 3px; margin-top: 3px; min-width: 60px; }
+.bar-fill { height: 100%; border-radius: 3px; }
+.bar-fill.tone-good { background: var(--good); }
+.bar-fill.tone-info { background: var(--info); }
+.bar-fill.tone-bad { background: var(--bad); }
+.open-stats li { margin: 4px 0; }
