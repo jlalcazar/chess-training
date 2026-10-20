@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.vite/
+
+# Documento de referencia privado: no subir nunca al repositorio
+Resumen_Ajedrez.md
+*Resumen_Ajedrez*.md
