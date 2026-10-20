@@ -81,3 +81,13 @@ test('nube de Lichess: completa con Stockfish lo que no tiene', async () => {
   assert.equal(best.via, 'stockfish');
   assert.deepEqual(rows.map((r) => [r.uci, r.via, r.score.cp]), [['g1f2', 'stockfish', -100]]);
 });
+
+test('winChance y describeAdvantage', async () => {
+  const { winChance, describeAdvantage } = await import('../src/engine.js');
+  assert.equal(winChance({ cp: 0 }), 0.5);
+  assert.ok(winChance({ cp: 300 }) > 0.7);
+  assert.equal(winChance({ mate: -2 }), 0);
+  assert.equal(describeAdvantage({ cp: 20 }), 'posición igualada');
+  assert.equal(describeAdvantage({ cp: -400 }), 'ventaja decisiva para el rival');
+  assert.equal(describeAdvantage({ mate: 3 }), 'das mate en 3');
+});

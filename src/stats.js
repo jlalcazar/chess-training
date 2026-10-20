@@ -23,7 +23,8 @@ const emptyQuestion = () => ({ asked: 0, correct: 0, missed: 0, falseAlarm: 0, u
  */
 export function recordExercise(stats, { answers = {}, notes = {}, keyQuestions = [], keyInCandidates = null }) {
   const next = structuredClone(stats ?? emptyStats());
-  next.exercises++;
+  // Solo cuentan los ejercicios con preguntas (el modo "sin tiempo" no las tiene).
+  if (Object.values(answers).some(Boolean)) next.exercises++;
   const keys = new Set(keyQuestions);
   for (const [id, answer] of Object.entries(answers)) {
     if (!answer) continue;
@@ -41,8 +42,8 @@ export function recordExercise(stats, { answers = {}, notes = {}, keyQuestions =
     } else {
       q.falseAlarm++;
     }
-    // La pregunta señalaba la jugada clave: ¿la viste?
-    if (keys.has(id)) {
+    // La pregunta señalaba la jugada clave (y de verdad había algo): ¿la viste?
+    if (keys.has(id) && answer.result.yes) {
       q.key++;
       if (!open && answer.user !== true) q.keyMissed++;
     }

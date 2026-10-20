@@ -2,7 +2,7 @@ import './styles.css';
 import { Chess } from 'chess.js';
 import { Board } from './board.js';
 import { COLOR_NAMES, describeIdea, describeLine, evaluateMove, findForcingIdea, load } from './analysis.js';
-import { DEFAULT_DEPTH, ENGINE_SOURCES, StockfishEngine, evaluateMoves, evaluatePosition, formatScore, pvToSan, toCp, verdict } from './engine.js';
+import { DEFAULT_DEPTH, ENGINE_SOURCES, StockfishEngine, describeAdvantage, evaluateMoves, evaluatePosition, formatScore, pvToSan, toCp, verdict, winChance } from './engine.js';
 import { emptyStats, recordExercise, summarize } from './stats.js';
 import { DIFFICULTIES, THEMES, fetchDailyPuzzle, fetchNextPuzzle, fetchPuzzleById, themeName } from './lichess.js';
 import {
@@ -176,11 +176,15 @@ function go(step) {
 function render() {
   if (!state) return;
   const { puzzle } = state;
+  const done = state.step === 'resumen';
   const header = h(
     'div',
     { class: 'puzzle-head' },
-    h('span', { class: `side side-${puzzle.heroColor}` }, `Juegan ${COLOR_NAMES[puzzle.heroColor]}`),
-    h('span', { class: 'muted' }, ` · Rival: ${puzzle.lastMove?.san} · Puzzle ${puzzle.id}${state.step === 'resumen' ? ` (${puzzle.rating})` : ''}`),
+    h('div', {},
+      h('span', { class: `side side-${puzzle.heroColor}` }, `Juegan ${COLOR_NAMES[puzzle.heroColor]}`),
+      h('span', { class: 'muted' }, ` · Rival: ${puzzle.lastMove?.san} · Puzzle ${puzzle.id}${done ? ` (${puzzle.rating})` : ''}`),
+    ),
+    h('button', { class: done ? 'primary next' : 'next', title: done ? '' : 'Pasa a otro ejercicio sin terminar este', onClick: () => loadPuzzle() }, 'Siguiente ejercicio →'),
   );
   const steps = settings.mode === 'tiempo'
     ? [['calma', 'Calma'], ['candidatas', 'Candidatas'], ['tactica', 'Táctica'], ['estrategia', state.plan.endgame ? 'Final' : 'Estrategia'], ['decision', 'Decisión'], ['resolver', 'Jugar'], ['resumen', 'Repaso']]
@@ -209,7 +213,10 @@ function syncBoard() {
     const pos = state.review.positions[state.review.index];
     board.setPosition(pos.fen, { lastMove: pos.lastMove });
     const focus = state.engineFocus;
+    const best = settings.engineOn ? state.review.evals.get(pos.fen)?.pv?.[0] : null;
     if (focus && state.review.index === state.review.puzzleIndex) board.setArrows([{ from: focus.uci.slice(0, 2), to: focus.uci.slice(2, 4), tone: focus.tone }]);
+    else if (best) board.setArrows([{ from: best.slice(0, 2), to: best.slice(2, 4), tone: 'good' }]);
+    else board.setArrows([]);
   }
   renderBoardNav();
 }
@@ -261,17 +268,33 @@ function renderBoardNav() {
       btn('⏭', 'Final', positions.length - 1, index === positions.length - 1),
     ),
     h('div', { class: 'nav-label' }, h('strong', {}, pos.label), h('span', { class: 'muted' }, where)),
-    ...(settings.engineOn ? [h('div', { class: 'nav-eval muted small' }, positionEvalText(ev, pos.fen))] : []),
+    ...(settings.engineOn ? [advantageBar(ev), h('div', { class: 'nav-eval muted small' }, positionEvalText(ev, pos.fen))] : []),
+  );
+}
+
+/** Puntuación de una evaluación de posición desde el punto de vista de quien resuelve. */
+function heroScore(ev) {
+  if (!ev) return null;
+  return ev.toMove === state.puzzle.heroColor ? ev.score : ev.score.mate != null ? { mate: -ev.score.mate } : { cp: -ev.score.cp };
+}
+
+/** Barra de ventaja tipo Lichess: tu parte en tu color, de izquierda a derecha. */
+function advantageBar(ev) {
+  const score = heroScore(ev);
+  const share = Math.round(winChance(score) * 100);
+  const hero = state.puzzle.heroColor === 'w' ? 'white' : 'black';
+  return h('div', { class: `adv-bar hero-${hero}`, role: 'img', 'aria-label': score ? describeAdvantage(score) : 'sin evaluación' },
+    h('div', { class: 'adv-fill', style: `width: ${score ? share : 50}%` }),
+    h('span', { class: 'adv-text' }, score ? `${formatScore(score)} · ${describeAdvantage(score)}` : '…'),
   );
 }
 
 function positionEvalText(ev, fen) {
   if (ev === undefined) return 'Evaluando la posición…';
   if (ev === null) return load(fen).isGameOver() ? 'Partida terminada.' : 'Sin evaluación para esta posición.';
-  // Puntuación desde el punto de vista de quien resuelve el ejercicio.
-  const score = ev.toMove === state.puzzle.heroColor ? ev.score : ev.score.mate != null ? { mate: -ev.score.mate } : { cp: -ev.score.cp };
   const best = pvToSan(fen, ev.pv, 4);
-  return `Evaluación (para ti): ${formatScore(score)} · mejor: ${best[0] ?? '—'} ${best.length > 1 ? `(${best.join(' ')})` : ''} · ${ev.via === 'cloud' ? 'nube de Lichess' : 'Stockfish'}`;
+  const mover = ev.toMove === state.puzzle.heroColor ? 'Tu mejor jugada' : 'Mejor jugada del rival';
+  return `${mover}: ${best[0] ?? '—'}${best.length > 1 ? ` (${best.join(' ')})` : ''} · ${ev.via === 'cloud' ? 'nube de Lichess' : 'Stockfish'}`;
 }
 
 let positionTimer = null;
@@ -291,7 +314,7 @@ function evaluateShownPosition() {
       console.error(err);
       if (run === engineRun) review.evals.set(fen, null);
     }
-    renderBoardNav();
+    if (state.review === review) syncBoard();
   }, 250);
 }
 
@@ -606,7 +629,7 @@ function playUserMove(move) {
   log('move', { uci, expected, correct });
   if (!correct) {
     const ev = evaluateMove(state.playFen, full);
-    state.mistakes.push({ ply: state.ply, san: played.san, expected, ev });
+    state.mistakes.push({ ply: state.ply, fen: state.playFen, uci, san: played.san, expected, ev });
     state.feedback = { type: 'ko', ev };
     render();
     return;
@@ -724,7 +747,6 @@ function resumen() {
     h('p', { class: 'muted small' }, `Dificultad Lichess: ${puzzle.rating} · Has resuelto ${solvedCount} de ${history.length} ejercicios en este navegador.`),
     h('p', {}, h('a', { href: puzzle.puzzleUrl, target: '_blank', rel: 'noopener' }, 'Ver en Lichess'), ' · ', h('a', { href: puzzle.gameUrl, target: '_blank', rel: 'noopener' }, 'Partida original')),
     engineSection(),
-    h('div', { class: 'actions' }, h('button', { class: 'primary', onClick: () => loadPuzzle() }, 'Siguiente ejercicio')),
   );
 }
 
@@ -751,7 +773,6 @@ function movesToEvaluate() {
   add(puzzle.solution[0], 'solución');
   for (const c of state.candidates) add(c.uci, 'candidata');
   add(state.intuition?.uci, 'intuición');
-  for (const m of state.mistakes) if (m.ply === 0) add(m.ev.uci, 'jugada fallida');
   return origin;
 }
 
@@ -777,6 +798,8 @@ async function startEngine() {
     if (run !== engineRun) return;
     Object.assign(state.engine, { status: 'done', best: result.best, rows: result.rows });
     log('engine', state.engine);
+    render();
+    await explainMistakes(run);
     evaluateShownPosition();
   } catch (err) {
     if (run !== engineRun) return;
@@ -784,6 +807,43 @@ async function startEngine() {
     Object.assign(state.engine, { status: 'error', error: err.message });
   }
   render();
+}
+
+/** Para cada jugada fallida: qué responde el rival y qué era mejor (siempre con Stockfish). */
+async function explainMistakes(run) {
+  const seen = new Set();
+  const list = state.mistakes.filter((m) => m.fen && !seen.has(m.fen + m.uci) && seen.add(m.fen + m.uci));
+  if (!list.length) return;
+  const explained = [];
+  for (const m of list) {
+    // En la posición del ejercicio se reutiliza lo ya evaluado, para que las cifras coincidan.
+    const atStart = m.fen === state.puzzle.fen;
+    const known = atStart ? state.engine.rows.find((r) => r.uci === m.uci && r.available) : null;
+    const best = atStart && state.engine.best ? state.engine.best : await engine.evaluate(m.fen, { depth: DEFAULT_DEPTH });
+    const played = known ?? (await engine.evaluate(m.fen, { depth: DEFAULT_DEPTH, move: m.uci }));
+    if (run !== engineRun) return;
+    explained.push({ ...m, best, played, loss: Math.max(0, toCp(best.score) - toCp(played.score)) });
+    state.engine.mistakes = [...explained];
+    render();
+  }
+}
+
+function mistakesView(ev) {
+  if (!ev.mistakes?.length) return null;
+  return h('div', { class: 'mistakes' },
+    h('h4', {}, 'Por qué fallaron tus jugadas'),
+    h('ul', {}, ev.mistakes.map((m) => {
+      const line = pvToSan(m.fen, m.played.pv, 5);
+      const best = pvToSan(m.fen, m.best.pv, 4);
+      const v = verdict(m.loss, m.played.score);
+      return h('li', {},
+        h('span', { class: `badge tone-${v.tone}` }, v.label), ' ',
+        h('strong', {}, m.san), ` (${formatScore(m.played.score)}, ${describeAdvantage(m.played.score)}). `,
+        line.length > 1 ? `El rival responde ${line[1]}${line.length > 2 ? ` y sigue ${line.slice(2).join(' ')}` : ''}. ` : '',
+        `Lo mejor era `, h('strong', {}, best[0] ?? '—'), ` (${formatScore(m.best.score)})${best.length > 1 ? `: ${best.join(' ')}` : ''}.`,
+      );
+    })),
+  );
 }
 
 function toggleEngine() {
@@ -850,13 +910,15 @@ function engineSection() {
         };
         return h('tr', { class: state.engineFocus?.uci === r.uci ? 'focus' : '', onClick: focus },
           h('td', {}, h('strong', {}, san[0] ?? r.uci), h('div', { class: 'muted small' }, ev.origin.get(r.uci)?.join(', '))),
-          h('td', { class: 'score' }, r.available ? formatScore(r.score) : '—', ev.source === 'cloud' && r.via ? h('div', { class: 'muted small' }, r.via === 'cloud' ? 'nube' : 'Stockfish') : null),
+          h('td', { class: 'score', title: r.available ? describeAdvantage(r.score) : '' }, r.available ? formatScore(r.score) : '—', ev.source === 'cloud' && r.via ? h('div', { class: 'muted small' }, r.via === 'cloud' ? 'nube' : 'Stockfish') : null),
           h('td', {}, v ? h('span', { class: `badge tone-${v.tone}` }, v.label) : h('span', { class: 'muted small' }, 'sin datos')),
           h('td', { class: 'muted small' }, san.slice(1).join(' ')),
         );
       })),
     ));
   }
+  const mistakes = mistakesView(ev);
+  if (mistakes) box.append(mistakes);
   if (ev.status === 'running') {
     const total = ev.origin.size;
     box.append(h('p', { class: 'muted small' }, `Analizando… ${ev.rows.length}/${total}${ev.source === 'stockfish' ? ` (profundidad ${DEFAULT_DEPTH})` : ''}`));

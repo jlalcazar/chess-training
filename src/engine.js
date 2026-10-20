@@ -241,3 +241,26 @@ export async function evaluatePosition(source, fen, { engine, depth = DEFAULT_DE
   if (!engine) return null;
   return { ...(await engine.evaluate(fen, { depth })), via: 'stockfish', toMove };
 }
+
+/** Probabilidad de ganar (0-1) para el bando de `score`, con la fórmula que usa Lichess. */
+export function winChance(score) {
+  if (!score) return 0.5;
+  if (score.mate != null) return score.mate > 0 ? 1 : 0;
+  const cp = Math.max(-1000, Math.min(1000, score.cp));
+  return 1 / (1 + Math.exp(-0.00368208 * cp));
+}
+
+/** La evaluación en palabras, desde el punto de vista de quien resuelve. */
+export function describeAdvantage(score) {
+  if (!score) return '';
+  if (score.mate != null) {
+    if (score.mate === 0) return 'mate';
+    return score.mate > 0 ? `das mate en ${score.mate}` : `recibes mate en ${-score.mate}`;
+  }
+  const a = Math.abs(score.cp);
+  const who = score.cp > 0 ? 'para ti' : 'para el rival';
+  if (a < 50) return 'posición igualada';
+  if (a < 150) return `ligera ventaja ${who}`;
+  if (a < 300) return `ventaja clara ${who}`;
+  return `ventaja decisiva ${who}`;
+}

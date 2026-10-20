@@ -49,7 +49,11 @@ Parámetros de URL útiles para depurar:
    - **Stockfish 19 WASM** (por defecto): versión *lite* de un hilo, corre en tu navegador sin servidor ni cabeceras especiales.
    - **Nube de análisis de Lichess** (`/api/cloud-eval`): instantánea, pero solo tiene las posiciones que alguien ya analizó; lo que falta se completa con Stockfish.
 
-   Con el motor activo, la navegación muestra también la evaluación de la posición del tablero.
+   Con el motor activo:
+   - la navegación muestra una **barra de ventaja** (con la evaluación en palabras: "ventaja clara
+     para ti", "recibes mate en 2"…) y una flecha con la mejor jugada de la posición del tablero;
+   - **"Por qué fallaron tus jugadas"**: para cada jugada errónea, Stockfish muestra la refutación
+     del rival y lo que era mejor.
 
 **Estadísticas por pregunta** (botón "Estadísticas"): al terminar cada ejercicio se guarda, en
 tu navegador, cómo respondiste a cada pregunta: aciertos, "no lo viste" (había algo y dijiste que

@@ -51,3 +51,16 @@ test('sin datos suficientes no se señala ninguna', () => {
   const s = recordExercise(emptyStats(), { answers: { geometria: yes(false) } });
   assert.equal(summarize(s).hardest, null);
 });
+
+test('responder bien "no" no cuenta como clave no vista', () => {
+  // La clave da jaque (etiqueta de la pregunta de mate) pero no hay mate: "No" es correcto.
+  const s = recordExercise(emptyStats(), { answers: { mate: no(false) }, keyQuestions: ['mate'] });
+  assert.equal(s.questions.mate.correct, 1);
+  assert.equal(s.questions.mate.key, 0);
+  assert.equal(s.questions.mate.keyMissed, 0);
+});
+
+test('los ejercicios sin preguntas no cuentan como ejercicios', () => {
+  const s = recordExercise(emptyStats(), { answers: {}, keyInCandidates: null });
+  assert.equal(s.exercises, 0);
+});
