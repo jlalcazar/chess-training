@@ -59,8 +59,10 @@ Parámetros de URL útiles para depurar:
 tu navegador, cómo respondiste a cada pregunta: aciertos, "no lo viste" (había algo y dijiste que
 no), falsas alarmas, "no lo sé" y, sobre todo, cuántas veces la pregunta llevaba a la jugada clave
 y no la viste. Con eso señala la pregunta que más te cuesta (a partir de 3 respuestas) y el
-porcentaje de ejercicios en que la clave estaba entre tus candidatas. Las preguntas abiertas no
-se puntúan: solo cuentan cuántas veces las pensaste y escribiste tu idea.
+porcentaje de ejercicios en que la clave estaba entre tus candidatas. Una pregunta solo cuenta
+como "llevaba a la clave" si el análisis respondía SÍ en esa posición. Las preguntas abiertas no
+se puntúan: solo cuentan cuántas veces las pensaste y escribiste tu idea. Solo registran los
+ejercicios del modo "con tiempo" (el modo "sin tiempo" no hace preguntas).
 
 **Modo "sin tiempo"**: intuición (cuenta atrás de 20 s), comprobación de que no te dejas nada, jugar.
 
@@ -79,7 +81,14 @@ se puntúan: solo cuentan cuántas veces las pensaste y escribiste tu idea.
 
 ## Próximas iteraciones
 
-- Estadísticas por pregunta para saber qué te cuesta más.
+Ideas pendientes de decidir:
+
+- Detectar candidatas pasadas por alto: barrido de jaques, capturas y amenazas antes de cerrar
+  las candidatas, y "puntos ciegos" (sacrificios, jugadas hacia atrás, jugadas tranquilas…).
+- Comparar tus candidatas con las 3 mejores de Stockfish (MultiPV).
+- Pistas graduadas en lugar de mostrar la solución de golpe.
+- Explicar la línea ganadora jugada a jugada en el tablero, con la evaluación tras cada jugada y
+  las defensas alternativas del rival.
 
 ## Créditos
 
