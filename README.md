@@ -7,6 +7,10 @@ del documento de referencia (privado, no está en el repositorio).
 
 ## Uso
 
+Requiere **Node.js 20.19 o superior** (recomendado 22). Comprueba tu versión con
+`node --version`; si es antigua, con [nvm](https://github.com/nvm-sh/nvm):
+`nvm install 22 && nvm use 22`.
+
 ```bash
 npm install
 npm run dev      # http://localhost:5173
