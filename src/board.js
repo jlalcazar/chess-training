@@ -1,7 +1,8 @@
 // Tablero DOM sencillo: piezas unicode, clic para mover, marcas y flechas.
 import { Chess } from 'chess.js';
 
-const GLYPHS = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
+// Piezas cburnett, el juego por defecto de Lichess (public/pieces/cburnett).
+const PIECE_BASE = `${import.meta.env?.BASE_URL ?? '/'}pieces/cburnett/`;
 const FILES = 'abcdefgh';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -81,10 +82,10 @@ export class Board {
       if (targets.has(sq)) cell.classList.add('target');
       const piece = chess.get(sq);
       if (piece) {
-        const span = document.createElement('span');
-        span.className = `piece ${piece.color === 'w' ? 'white' : 'black'}`;
-        span.textContent = GLYPHS[piece.type] + '︎';
-        cell.append(span);
+        const img = document.createElement('div');
+        img.className = 'piece';
+        img.style.backgroundImage = `url(${PIECE_BASE}${piece.color}${piece.type.toUpperCase()}.svg)`;
+        cell.append(img);
       }
       const showFile = (this.orientation === 'w' ? r === 0 : r === 7);
       const showRank = (this.orientation === 'w' ? f === 0 : f === 7);

@@ -56,3 +56,9 @@ Parámetros de URL útiles para depurar:
 - Evaluación real con la [nube de análisis de Lichess](https://lichess.org/api#tag/Analysis) (`/api/cloud-eval`) o Stockfish WASM, para valorar las candidatas.
 - Detectar ideas de más de una jugada (p. ej. jaque y luego ataque doble).
 - Estadísticas por pregunta para saber qué te cuesta más.
+
+## Créditos
+
+Piezas *cburnett* de [Colin M.L. Burnett](https://en.wikipedia.org/wiki/User:Cburnett)
+(GPLv2+ / CC BY-SA 3.0), las mismas que usa Lichess por defecto, copiadas de
+[lichess-org/lila](https://github.com/lichess-org/lila/tree/master/public/piece/cburnett).
