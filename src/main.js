@@ -1,7 +1,8 @@
 import './styles.css';
+import { Chess } from 'chess.js';
 import { Board } from './board.js';
-import { COLOR_NAMES, evaluateMove, load } from './analysis.js';
-import { DEFAULT_DEPTH, ENGINE_SOURCES, StockfishEngine, evaluateMoves, formatScore, pvToSan, toCp, verdict } from './engine.js';
+import { COLOR_NAMES, describeIdea, describeLine, evaluateMove, findForcingIdea, load } from './analysis.js';
+import { DEFAULT_DEPTH, ENGINE_SOURCES, StockfishEngine, evaluateMoves, evaluatePosition, formatScore, pvToSan, toCp, verdict } from './engine.js';
 import { DIFFICULTIES, THEMES, fetchDailyPuzzle, fetchNextPuzzle, fetchPuzzleById, themeName } from './lichess.js';
 import {
   BREATHING,
@@ -202,12 +203,104 @@ function syncBoard() {
     board.setArrows([]);
   }
   if (!['tactica', 'estrategia'].includes(step)) board.setMarks({});
-  if (step === 'resumen' && state.engineFocus) {
-    const { uci, tone } = state.engineFocus;
-    board.setPosition(state.puzzle.fen, { lastMove: state.puzzle.lastMove });
-    board.setArrows([{ from: uci.slice(0, 2), to: uci.slice(2, 4), tone }]);
+  if (step === 'resumen' && state.review) {
+    const pos = state.review.positions[state.review.index];
+    board.setPosition(pos.fen, { lastMove: pos.lastMove });
+    const focus = state.engineFocus;
+    if (focus && state.review.index === state.review.puzzleIndex) board.setArrows([{ from: focus.uci.slice(0, 2), to: focus.uci.slice(2, 4), tone: focus.tone }]);
   }
+  renderBoardNav();
 }
+
+// ------------------------------------------- navegación por la partida (repaso)
+
+/** Todas las posiciones: desde el inicio de la partida, pasando por el ejercicio, hasta el final de la solución. */
+function buildReview(puzzle) {
+  const chess = load(new Chess().fen());
+  const positions = [{ fen: chess.fen(), lastMove: null, label: 'Posición inicial' }];
+  const push = (m) => {
+    const ply = positions.length;
+    const label = `${Math.ceil(ply / 2)}${ply % 2 ? '.' : '...'} ${m.san}`;
+    positions.push({ fen: chess.fen(), lastMove: { from: m.from, to: m.to }, label });
+  };
+  for (const san of puzzle.gameMoves) push(chess.move(san));
+  const puzzleIndex = positions.length - 1;
+  for (const uci of puzzle.solution) push(chess.move(uciToMove(uci)));
+  return { positions, puzzleIndex, index: positions.length - 1, evals: new Map() };
+}
+
+function navigate(index) {
+  if (!state?.review || state.step !== 'resumen') return;
+  const { positions } = state.review;
+  state.review.index = Math.max(0, Math.min(positions.length - 1, index));
+  state.engineFocus = null;
+  board.setArrows([]);
+  syncBoard();
+  if (settings.engineOn) evaluateShownPosition();
+}
+
+const boardNav = $('#board-nav');
+
+function renderBoardNav() {
+  const review = state?.step === 'resumen' ? state.review : null;
+  boardNav.hidden = !review;
+  if (!review) return;
+  const { positions, index, puzzleIndex } = review;
+  const pos = positions[index];
+  const btn = (label, title, target, disabled) => h('button', { title, 'aria-label': title, disabled, onClick: () => navigate(target) }, label);
+  const where = index === puzzleIndex ? ' · posición del ejercicio' : index > puzzleIndex ? ' · solución' : '';
+  const ev = settings.engineOn ? review.evals.get(pos.fen) : null;
+  boardNav.replaceChildren(
+    h('div', { class: 'nav-buttons' },
+      btn('⏮', 'Posición inicial', 0, index === 0),
+      btn('◀', 'Jugada anterior', index - 1, index === 0),
+      btn('Ejercicio', 'Ir a la posición del ejercicio', puzzleIndex, index === puzzleIndex),
+      btn('▶', 'Jugada siguiente', index + 1, index === positions.length - 1),
+      btn('⏭', 'Final', positions.length - 1, index === positions.length - 1),
+    ),
+    h('div', { class: 'nav-label' }, h('strong', {}, pos.label), h('span', { class: 'muted' }, where)),
+    settings.engineOn ? h('div', { class: 'nav-eval muted small' }, positionEvalText(ev, pos.fen)) : null,
+  );
+}
+
+function positionEvalText(ev, fen) {
+  if (ev === undefined) return 'Evaluando la posición…';
+  if (ev === null) return load(fen).isGameOver() ? 'Partida terminada.' : 'Sin evaluación para esta posición.';
+  // Puntuación desde el punto de vista de quien resuelve el ejercicio.
+  const score = ev.toMove === state.puzzle.heroColor ? ev.score : ev.score.mate != null ? { mate: -ev.score.mate } : { cp: -ev.score.cp };
+  const best = pvToSan(fen, ev.pv, 4);
+  return `Evaluación (para ti): ${formatScore(score)} · mejor: ${best[0] ?? '—'} ${best.length > 1 ? `(${best.join(' ')})` : ''} · ${ev.via === 'cloud' ? 'nube de Lichess' : 'Stockfish'}`;
+}
+
+let positionTimer = null;
+function evaluateShownPosition() {
+  clearTimeout(positionTimer);
+  const review = state.review;
+  const { fen } = review.positions[review.index];
+  if (review.evals.has(fen)) return;
+  const run = engineRun;
+  positionTimer = setTimeout(async () => {
+    try {
+      engine ??= new StockfishEngine();
+      const ev = await evaluatePosition(settings.engineSource, fen, { engine, depth: 12 });
+      if (run !== engineRun || state.review !== review) return;
+      review.evals.set(fen, ev);
+    } catch (err) {
+      console.error(err);
+      if (run === engineRun) review.evals.set(fen, null);
+    }
+    renderBoardNav();
+  }, 250);
+}
+
+document.addEventListener('keydown', (ev) => {
+  if (state?.step !== 'resumen' || ['INPUT', 'TEXTAREA', 'SELECT'].includes(ev.target.tagName)) return;
+  const { index, positions } = state.review ?? {};
+  const target = { ArrowLeft: index - 1, ArrowRight: index + 1, Home: 0, End: positions?.length - 1 }[ev.key];
+  if (target === undefined) return;
+  ev.preventDefault();
+  navigate(target);
+});
 
 // --------------------------------------------------------------- paso: calma
 
@@ -241,8 +334,21 @@ function calma() {
 
 // ---------------------------------------------------------- paso: candidatas
 
+/** evaluateMove + la idea forzada de varias jugadas que empieza con esa jugada. */
+function evaluateWithIdea(fen, move) {
+  const ev = evaluateMove(fen, move);
+  if (!ev) return null;
+  const idea = findForcingIdea(fen, { firstMove: ev.move, maxMs: 300 });
+  if (idea) {
+    ev.idea = idea;
+    ev.tags.push({ q: idea.mate ? 'mate' : 'geometria', text: `idea forzada de ${idea.moves} jugadas: ${describeIdea(idea, { moves: false })}` });
+    ev.yesCount = new Set(ev.tags.map((t) => t.q)).size;
+  }
+  return ev;
+}
+
 function addCandidate(move) {
-  const ev = evaluateMove(state.puzzle.fen, move);
+  const ev = evaluateWithIdea(state.puzzle.fen, move);
   if (!ev || state.candidates.some((c) => c.uci === ev.uci)) return;
   if (state.candidates.length >= MAX_CANDIDATES) return;
   state.candidates.push(ev);
@@ -310,12 +416,23 @@ function questionView(questions, title, intro, onDone) {
       render();
       showFindings(result.findings);
     };
-    children.push(h('div', { class: 'actions' }, h('button', { onClick: () => pick(true) }, 'Sí'), h('button', { onClick: () => pick(false) }, 'No'), h('button', { class: 'link', onClick: () => pick(null) }, 'No lo sé')));
+    if (q.open) {
+      const note = h('textarea', { rows: 2, placeholder: 'Escribe tu idea (opcional)' });
+      children.push(
+        h('label', { class: 'block' }, 'Tu respuesta:', note),
+        h('div', { class: 'actions' }, h('button', { class: 'primary', onClick: () => { state.notes = { ...state.notes, [q.id]: note.value }; pick(null); } }, 'Ver el análisis')),
+      );
+    } else {
+      children.push(h('div', { class: 'actions' }, h('button', { onClick: () => pick(true) }, 'Sí'), h('button', { onClick: () => pick(false) }, 'No'), h('button', { class: 'link', onClick: () => pick(null) }, 'No lo sé')));
+    }
   } else {
     const { user, result } = answer;
-    const verdict = user === null ? 'Lo importante es hacerse la pregunta. Mira lo que hay:' : user === result.yes ? '¡Bien visto!' : result.yes ? 'Había algo: revisa con calma.' : 'Esta vez no había nada relevante.';
+    const verdict = q.open
+      ? 'Pregunta abierta: no hay respuesta correcta o incorrecta. Contrasta tu idea con esto:'
+      : user === null ? 'Lo importante es hacerse la pregunta. Mira lo que hay:' : user === result.yes ? '¡Bien visto!' : result.yes ? 'Había algo: revisa con calma.' : 'Esta vez no había nada relevante.';
     children.push(
-      h('p', { class: `verdict ${user === result.yes ? 'ok' : 'ko'}` }, verdict),
+      q.open && state.notes?.[q.id] ? h('p', {}, h('strong', {}, 'Tu idea: '), state.notes[q.id]) : null,
+      h('p', { class: `verdict ${q.open || user === result.yes ? 'ok' : 'ko'}` }, verdict),
       findingsList(result.findings),
       h('p', { class: 'muted small' }, 'Pulsa una línea para verla en el tablero. Verde: a tu favor. Rojo: peligro para ti.'),
       h('div', { class: 'actions' },
@@ -441,7 +558,7 @@ function onBoardMove(move) {
     case 'candidatas':
       return addCandidate(move);
     case 'intuicion': {
-      const ev = evaluateMove(state.puzzle.fen, withPromotion(move, 0));
+      const ev = evaluateWithIdea(state.puzzle.fen, withPromotion(move, 0));
       if (!ev) return;
       state.intuition = ev;
       return go('comprobacion');
@@ -564,6 +681,7 @@ function finish(solved) {
   const history = storage.get('history', []);
   history.unshift({ id: puzzle.id, rating: puzzle.rating, solved: state.solved, mistakes: state.mistakes.length, level: settings.level, mode: settings.mode, date: new Date().toISOString() });
   storage.set('history', history.slice(0, 200));
+  state.review = buildReview(puzzle);
   go('resumen');
   if (settings.engineOn) startEngine();
 }
@@ -572,7 +690,8 @@ function resumen() {
   const { puzzle } = state;
   const key = evaluateMove(puzzle.fen, uciToMove(puzzle.solution[0]));
   const solutionInCandidates = state.candidates.some((c) => c.uci === key.uci) || state.intuition?.uci === key.uci;
-  const missed = Object.entries(state.answers).filter(([, a]) => a && a.user !== null && a.user !== a.result.yes);
+  const isOpen = (id) => [...state.plan.tactical, ...state.plan.strategic].find((q) => q.id === id)?.open;
+  const missed = Object.entries(state.answers).filter(([id, a]) => a && !isOpen(id) && a.user !== null && a.user !== a.result.yes);
   const history = storage.get('history', []);
   const solvedCount = history.filter((x) => x.solved).length;
   const line = (() => {
@@ -585,6 +704,7 @@ function resumen() {
     h('p', {}, h('strong', {}, 'Solución: '), line),
     h('p', {}, h('strong', {}, 'Temas: '), puzzle.themes.map(themeName).join(', ')),
     h('p', {}, h('strong', {}, `Clave ${key.san}: `), key.tags.length ? key.tags.map((t) => t.text).join('; ') : 'jugada tranquila: no da jaque ni captura; aquí cuentan las preguntas estratégicas.'),
+    h('p', {}, h('strong', {}, 'La idea, paso a paso: '), describeIdea(describeLine(puzzle.fen, puzzle.solution))),
     settings.mode === 'tiempo'
       ? h('p', { class: solutionInCandidates ? 'ok' : 'ko' }, solutionInCandidates ? 'La jugada clave estaba entre tus candidatas. La técnica de candidatas funciona.' : 'La jugada clave no estaba entre tus candidatas. Repasa: ¿qué pregunta te habría llevado a ella?')
       : h('p', { class: state.intuition?.uci === key.uci ? 'ok' : 'ko' }, state.intuition?.uci === key.uci ? 'Tu intuición acertó.' : `Tu intuición fue ${state.intuition?.san ?? '—'}. Con más tiempo, el proceso completo ayuda a corregirla.`),
@@ -633,7 +753,8 @@ async function startEngine() {
   state.engineFocus = null;
   render();
   try {
-    if (source === 'stockfish') engine ??= new StockfishEngine();
+    // También con la nube: Stockfish completa las posiciones que la nube no tiene.
+    engine ??= new StockfishEngine();
     const result = await evaluateMoves(source, puzzle.fen, [...origin.keys()], {
       engine,
       onProgress: ({ best, rows }) => {
@@ -645,6 +766,7 @@ async function startEngine() {
     if (run !== engineRun) return;
     Object.assign(state.engine, { status: 'done', best: result.best, rows: result.rows });
     log('engine', state.engine);
+    evaluateShownPosition();
   } catch (err) {
     if (run !== engineRun) return;
     console.error(err);
@@ -697,8 +819,9 @@ function engineSection() {
   if (ev.best) {
     const san = pvToSan(puzzle.fen, ev.best.pv);
     box.append(h('p', {}, h('strong', {}, 'Mejor según el motor: '), `${san[0] ?? '—'} (${formatScore(ev.best.score)}) `, h('span', { class: 'muted' }, san.join(' '))));
-  } else if (ev.source === 'cloud' && ev.status !== 'running') {
-    box.append(h('p', { class: 'muted small' }, 'La nube de Lichess no tiene esta posición analizada. Prueba con Stockfish.'));
+  }
+  if (ev.source === 'cloud' && (ev.best?.via === 'stockfish' || ev.rows.some((r) => r.via === 'stockfish'))) {
+    box.append(h('p', { class: 'muted small' }, 'La nube de Lichess solo tiene las posiciones que alguien ya analizó; lo que faltaba se ha completado con Stockfish (marcado como "Stockfish").'));
   }
   const available = ev.rows.filter((r) => r.available);
   const reference = ev.best ? toCp(ev.best.score) : Math.max(...available.map((r) => toCp(r.score)));
@@ -711,12 +834,13 @@ function engineSection() {
         const v = r.available ? verdict(Math.max(0, reference - toCp(r.score)), r.score) : null;
         const focus = () => {
           state.engineFocus = { uci: r.uci, tone: v?.tone ?? 'info' };
-          syncBoard();
+          state.review.index = state.review.puzzleIndex;
+          render();
         };
         return h('tr', { class: state.engineFocus?.uci === r.uci ? 'focus' : '', onClick: focus },
           h('td', {}, h('strong', {}, san[0] ?? r.uci), h('div', { class: 'muted small' }, ev.origin.get(r.uci)?.join(', '))),
-          h('td', { class: 'score' }, r.available ? formatScore(r.score) : '—'),
-          h('td', {}, v ? h('span', { class: `badge tone-${v.tone}` }, v.label) : h('span', { class: 'muted small' }, 'sin datos en la nube')),
+          h('td', { class: 'score' }, r.available ? formatScore(r.score) : '—', ev.source === 'cloud' && r.via ? h('div', { class: 'muted small' }, r.via === 'cloud' ? 'nube' : 'Stockfish') : null),
+          h('td', {}, v ? h('span', { class: `badge tone-${v.tone}` }, v.label) : h('span', { class: 'muted small' }, 'sin datos')),
           h('td', { class: 'muted small' }, san.slice(1).join(' ')),
         );
       })),

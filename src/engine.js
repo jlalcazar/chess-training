@@ -179,26 +179,28 @@ export async function evaluateMoves(source, fen, moves, { engine, depth = DEFAUL
   const rows = [];
 
   if (source === 'stockfish') {
-    const best = await engine.evaluate(fen, { depth });
+    const best = { ...(await engine.evaluate(fen, { depth })), via: 'stockfish' };
     onProgress?.({ best, rows });
     for (const uci of unique) {
       const r = await engine.evaluate(fen, { depth, move: uci });
-      rows.push({ uci, score: r.score, pv: r.pv, available: true });
+      rows.push({ uci, score: r.score, pv: r.pv, available: true, via: 'stockfish' });
       onProgress?.({ best, rows });
     }
     return { best, rows };
   }
 
   // Nube: la raíz da las mejores jugadas; el resto se evalúa tras jugarlas.
+  // Lo que la nube no tiene se completa con Stockfish si hay `engine`.
   const fromWhite = (s) => (hero === 'w' ? s : negate(s));
   const root = await fetchCloudEval(fen, { multiPv: 5 }, fetchImpl);
   const rootPvs = root ? root.pvs.map((p) => ({ ...p, score: fromWhite(p.score) })) : [];
-  const best = rootPvs[0] ? { score: rootPvs[0].score, pv: rootPvs[0].pv, depth: root.depth } : null;
+  let best = rootPvs[0] ? { score: rootPvs[0].score, pv: rootPvs[0].pv, depth: root.depth, via: 'cloud' } : null;
+  if (!best && engine) best = { ...(await engine.evaluate(fen, { depth })), via: 'stockfish' };
   onProgress?.({ best, rows });
   for (const uci of unique) {
     const known = rootPvs.find((p) => p.pv[0] === uci);
     if (known) {
-      rows.push({ uci, score: known.score, pv: known.pv, available: true });
+      rows.push({ uci, score: known.score, pv: known.pv, available: true, via: 'cloud' });
     } else {
       const chess = new Chess(fen);
       let after;
@@ -209,13 +211,33 @@ export async function evaluateMoves(source, fen, moves, { engine, depth = DEFAUL
         continue;
       }
       if (chess.isCheckmate()) {
-        rows.push({ uci, score: { mate: 1 }, pv: [uci], available: true });
+        rows.push({ uci, score: { mate: 1 }, pv: [uci], available: true, via: 'cloud' });
       } else {
         const ev = await fetchCloudEval(after, { multiPv: 1 }, fetchImpl);
-        rows.push(ev ? { uci, score: fromWhite(ev.pvs[0].score), pv: [uci, ...ev.pvs[0].pv], available: true } : { uci, score: null, pv: [uci], available: false });
+        if (ev) {
+          rows.push({ uci, score: fromWhite(ev.pvs[0].score), pv: [uci, ...ev.pvs[0].pv], available: true, via: 'cloud' });
+        } else if (engine) {
+          const r = await engine.evaluate(fen, { depth, move: uci });
+          rows.push({ uci, score: r.score, pv: r.pv, available: true, via: 'stockfish' });
+        } else {
+          rows.push({ uci, score: null, pv: [uci], available: false });
+        }
       }
     }
     onProgress?.({ best, rows });
   }
   return { best, rows };
+}
+
+/** Evaluación de una posición suelta (para navegar por la partida). */
+export async function evaluatePosition(source, fen, { engine, depth = DEFAULT_DEPTH, fetchImpl = fetch } = {}) {
+  const chess = new Chess(fen);
+  if (chess.isGameOver()) return null;
+  const toMove = chess.turn();
+  if (source === 'cloud') {
+    const root = await fetchCloudEval(fen, { multiPv: 1 }, fetchImpl);
+    if (root) return { score: toMove === 'w' ? root.pvs[0].score : negate(root.pvs[0].score), pv: root.pvs[0].pv, via: 'cloud', toMove };
+  }
+  if (!engine) return null;
+  return { ...(await engine.evaluate(fen, { depth })), via: 'stockfish', toMove };
 }

@@ -35,13 +35,21 @@ Parámetros de URL útiles para depurar:
    debilidades, peor pieza (C-A-T-D), qué quiere el rival, cambios de piezas, cambios de estructura.
    Si no hay damas, se usan las **preguntas de finales** (coronar, activar la torre, fijar
    debilidades, qué cambiar, mejores casillas).
-5. **Decisión**: cada candidata muestra cuántos "síes" consigue y qué deja colgado.
+   Las preguntas que no tienen respuesta de sí o no (peor pieza, plan del rival, cambios,
+   estructura…) son **abiertas**: escribes tu idea y la contrastas con el análisis.
+5. **Decisión**: cada candidata muestra cuántos "síes" consigue, qué deja colgado y si abre
+   una **idea forzada de varias jugadas** (p. ej. "da jaque → ataque doble → ganas material"),
+   sin desvelar las jugadas.
 6. **Jugar** la línea contra las respuestas del puzzle.
-7. **Repaso**: solución, temas, si la clave estaba entre tus candidatas y en qué preguntas fallaste.
+7. **Repaso**: solución explicada paso a paso, temas, si la clave estaba entre tus candidatas y en
+   qué preguntas fallaste. Bajo el tablero puedes **navegar por toda la partida** (⏮ ◀ Ejercicio ▶ ⏭
+   o las flechas del teclado), desde la posición inicial hasta el final de la solución.
    Aquí, y solo aquí, se puede **activar el motor** (botón "Activar motor") para evaluar
    la solución, tus candidatas, tu intuición y tus fallos, con una de dos fuentes:
    - **Stockfish 19 WASM** (por defecto): versión *lite* de un hilo, corre en tu navegador sin servidor ni cabeceras especiales.
-   - **Nube de análisis de Lichess** (`/api/cloud-eval`): instantánea, pero solo tiene las posiciones que alguien ya analizó.
+   - **Nube de análisis de Lichess** (`/api/cloud-eval`): instantánea, pero solo tiene las posiciones que alguien ya analizó; lo que falta se completa con Stockfish.
+
+   Con el motor activo, la navegación muestra también la evaluación de la posición del tablero.
 
 **Modo "sin tiempo"**: intuición (cuenta atrás de 20 s), comprobación de que no te dejas nada, jugar.
 
@@ -50,7 +58,7 @@ Parámetros de URL útiles para depurar:
 | Archivo | Qué hace |
 | --- | --- |
 | `src/lichess.js` | Cliente de la API (`/api/puzzle/next`, `/api/puzzle/{id}`, `/api/puzzle/daily`) y reconstrucción de la posición desde el PGN. |
-| `src/analysis.js` | Análisis heurístico sin motor: mates en 1, piezas colgadas/amenazadas, ataques dobles, clavadas/enfiladas, estructura de peones, movilidad, ideas del rival. |
+| `src/analysis.js` | Análisis heurístico sin motor: mates en 1, piezas colgadas/amenazadas, ataques dobles, clavadas/enfiladas, estructura de peones, movilidad, ideas del rival y una búsqueda táctica de jugadas forzadas (jaques y capturas) para las ideas de varias jugadas. |
 | `src/method.js` | El método: niveles, preguntas y su respuesta calculada sobre la posición. |
 | `src/engine.js` | Evaluación real: Stockfish WASM en un Web Worker (UCI, `searchmoves` por candidata) y la nube de Lichess. |
 | `scripts/copy-stockfish.mjs` | Copia el motor de `node_modules/stockfish` a `public/stockfish/` (se ejecuta al instalar, en `dev` y en `build`). |
@@ -59,7 +67,6 @@ Parámetros de URL útiles para depurar:
 
 ## Próximas iteraciones
 
-- Detectar ideas de más de una jugada (p. ej. jaque y luego ataque doble).
 - Estadísticas por pregunta para saber qué te cuesta más.
 
 ## Créditos

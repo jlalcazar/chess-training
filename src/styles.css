@@ -178,3 +178,11 @@ table.engine-table td.score { font-variant-numeric: tabular-nums; font-weight: 6
 .badge.tone-good { color: var(--good); }
 .badge.tone-bad { color: var(--bad); }
 .badge.tone-info { color: var(--info); }
+
+.board-nav { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.board-nav[hidden] { display: none; }
+.nav-buttons { display: grid; grid-template-columns: 1fr 1fr 2fr 1fr 1fr; gap: 6px; }
+.nav-buttons button { padding: 8px 0; font-size: 1rem; }
+.nav-buttons button:disabled { opacity: 0.4; cursor: default; }
+.nav-label { text-align: center; }
+.nav-eval { text-align: center; }

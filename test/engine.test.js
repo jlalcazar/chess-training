@@ -66,8 +66,18 @@ test('nube de Lichess: usa la raíz, evalúa tras la jugada y gira el signo para
   };
   const { best, rows } = await evaluateMoves('cloud', fen, ['a1a2', 'g8f8', 'h7h6'], { fetchImpl: fakeFetch });
   assert.deepEqual(best.score, { cp: 500 });
-  assert.deepEqual(rows[0], { uci: 'a1a2', score: { cp: 500 }, pv: ['a1a2', 'g1f1'], available: true });
+  assert.deepEqual(rows[0], { uci: 'a1a2', score: { cp: 500 }, pv: ['a1a2', 'g1f1'], available: true, via: 'cloud' });
   assert.deepEqual(rows[1].score, { cp: -40 });
   assert.equal(rows[2].available, false);
+  assert.equal(rows[0].via, 'cloud');
   assert.match(calls[0], /cloud-eval\?fen=.*&multiPv=5/);
+});
+
+test('nube de Lichess: completa con Stockfish lo que no tiene', async () => {
+  const engine = new StockfishEngine('sf.js', FakeWorker);
+  const fen = '6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1';
+  const notFound = async () => ({ ok: false, status: 404 });
+  const { best, rows } = await evaluateMoves('cloud', fen, ['g1f2'], { engine, fetchImpl: notFound, depth: 10 });
+  assert.equal(best.via, 'stockfish');
+  assert.deepEqual(rows.map((r) => [r.uci, r.via, r.score.cp]), [['g1f2', 'stockfish', -100]]);
 });

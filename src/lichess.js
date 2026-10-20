@@ -150,6 +150,7 @@ export function parsePuzzle(data) {
     fenBefore,
     lastMove: last && { from: last.from, to: last.to, san: last.san },
     heroColor: chess.turn(),
+    gameMoves: sans,
     players: { white: white && `${white.name} (${white.rating})`, black: black && `${black.name} (${black.rating})` },
     puzzleUrl: `https://lichess.org/training/${puzzle.id}`,
     gameUrl: `https://lichess.org/${game.id}`,

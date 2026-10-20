@@ -4,6 +4,10 @@ import {
   COLOR_NAMES,
   PIECE_NAMES,
   alignments,
+  availableTrades,
+  describeIdea,
+  findForcingIdea,
+  withTurn,
   forks,
   isEndgame,
   kingSafety,
@@ -61,23 +65,23 @@ export const TACTICAL_QUESTIONS = [
   { id: 'mate', text: '¿Hay mate en esta posición?', hint: 'Mira todos los jaques, tuyos y del rival.' },
   { id: 'desprotegidas', text: '¿Hay piezas desprotegidas?', hint: 'Busca piezas sin ningún defensor, de los dos colores.' },
   { id: 'amenazadas', text: '¿Hay piezas amenazadas en la posición?', hint: '¿Qué está atacado? ¿Por algo de menos valor? ¿Con más atacantes que defensores?' },
-  { id: 'geometria', text: '¿Hay piezas alineadas, a salto de caballo o a doble de peón?', hint: 'Clavadas, enfiladas, ataques dobles de caballo y de peón.' },
+  { id: 'geometria', text: '¿Hay piezas alineadas, a salto de caballo o a doble de peón?', hint: 'Clavadas, enfiladas, ataques dobles de caballo y de peón. Piensa también en ideas de dos o tres jugadas: un jaque que prepara un ataque doble.' },
 ];
 
 export const STRATEGIC_QUESTIONS = {
   debilidades: { text: '¿Dónde están las debilidades?', hint: 'Peones aislados o doblados, casillas débiles, rey sin escudo de peones.' },
-  peorPieza: { text: '¿Cuál es mi peor pieza?', hint: 'Habla con tus piezas. Prioridad al activar: Caballo, Alfil, Torre, Dama.' },
-  rival: { text: '¿Qué quiere hacer mi rival?', hint: 'Si le tocara mover, ¿qué jugaría? Su idea guía tu decisión.' },
-  cambios: { text: '¿Qué cambio de piezas me favorece?', hint: '¿Cambiar damas? ¿Un caballo por un alfil? Depende del material y de la seguridad del rey.' },
-  estructura: { text: '¿Qué cambios de estructura me favorecen?', hint: '¿Qué jugada de peón es buena y cuál no?' },
+  peorPieza: { open: true, text: '¿Cuál es mi peor pieza?', hint: 'Habla con tus piezas. Prioridad al activar: Caballo, Alfil, Torre, Dama.' },
+  rival: { open: true, text: '¿Qué quiere hacer mi rival?', hint: 'Si le tocara mover, ¿qué jugaría? Su idea guía tu decisión.' },
+  cambios: { open: true, text: '¿Qué cambio de piezas me favorece?', hint: '¿Cambiar damas? ¿Un caballo por un alfil? Depende del material y de la seguridad del rey.' },
+  estructura: { open: true, text: '¿Qué cambios de estructura me favorecen?', hint: '¿Qué jugada de peón es buena y cuál no?' },
 };
 
 export const ENDGAME_QUESTIONS = {
   coronar: { text: '¿Puedo coronar un peón?', hint: 'Peones pasados y carreras de peones.' },
-  torre: { text: '¿Puedo activar mi torre?', hint: 'Columnas abiertas, séptima fila, detrás de los peones pasados.' },
+  torre: { open: true, text: '¿Puedo activar mi torre?', hint: 'Columnas abiertas, séptima fila, detrás de los peones pasados.' },
   fijar: { text: '¿Puedo fijar una debilidad?', hint: 'Peones rivales aislados o doblados que no se pueden mover.' },
-  cambiosFinal: { text: '¿Qué piezas debo cambiar en el final?', hint: 'Con ventaja, cambia piezas, no peones.' },
-  casillas: { text: '¿Cuáles son las mejores casillas para mis piezas?', hint: 'Pensamiento esquemático: dónde quieres cada pieza en unas jugadas.' },
+  cambiosFinal: { open: true, text: '¿Qué piezas debo cambiar en el final?', hint: 'Con ventaja, cambia piezas, no peones.' },
+  casillas: { open: true, text: '¿Cuáles son las mejores casillas para mis piezas?', hint: 'Pensamiento esquemático: dónde quieres cada pieza en unas jugadas.' },
 };
 
 export const NO_TIME_STEPS = [
@@ -100,6 +104,8 @@ export function answerQuestion(id, fen, hero) {
       const mine = mateInOne(fen, hero);
       const theirs = mateInOne(fen, enemy);
       for (const m of mine) findings.push(finding(`Tienes mate en 1: ${m.san}`, [m.from, m.to], 'good'));
+      const longMate = mine.length ? null : findForcingIdea(fen);
+      if (longMate?.mate) findings.push(finding(`Hay un mate forzado en ${longMate.moves} jugadas: ${describeIdea(longMate, { moves: false })}`, [], 'good'));
       for (const m of theirs) findings.push(finding(`El rival amenaza mate: ${m.san}`, [m.from, m.to], 'bad'));
       const checks = load(fen).moves({ verbose: true }).filter((m) => m.san.includes('+') && !m.san.endsWith('#'));
       if (!mine.length && checks.length) {
@@ -107,7 +113,7 @@ export function answerQuestion(id, fen, hero) {
       }
       const ks = kingSafety(chess, enemy);
       if (ks && ks.shield <= 1) findings.push(finding(`El rey rival en ${ks.square} tiene poca protección de peones`, [ks.square], 'info'));
-      return { yes: mine.length > 0 || theirs.length > 0, findings };
+      return { yes: mine.length > 0 || theirs.length > 0 || Boolean(longMate?.mate), findings };
     }
     case 'desprotegidas': {
       for (const c of [hero, enemy]) {
@@ -126,6 +132,13 @@ export function answerQuestion(id, fen, hero) {
       return { yes: findings.length > 0, findings };
     }
     case 'geometria': {
+      for (const c of [hero, enemy]) {
+        const idea = findForcingIdea(c === hero ? fen : withTurn(fen, c));
+        if (idea) {
+          const first = idea.line[0];
+          findings.push(finding(`${c === hero ? 'Hay una idea forzada' : 'Cuidado: el rival tiene una idea forzada'} de ${idea.moves} jugadas: ${describeIdea(idea, { moves: c !== hero })}`, c === hero ? [] : [first.uci.slice(0, 2), first.uci.slice(2, 4)], c === hero ? 'good' : 'bad'));
+        }
+      }
       for (const c of [hero, enemy]) {
         const who = c === hero ? 'Tienes' : 'El rival tiene';
         for (const f of forks(fen, c)) {
@@ -179,7 +192,13 @@ export function answerQuestion(id, fen, hero) {
       else findings.push(finding('Material igualado: cambia tu peor pieza por la mejor del rival', [], 'info'));
       const ksMine = kingSafety(chess, hero);
       if (m.queens && ksMine && ksMine.shield <= 1) findings.push(finding('Tu rey está expuesto: cambiar damas reduce el peligro', [ksMine.square], 'info'));
-      return { yes: diff !== 0, findings };
+      for (const t of availableTrades(fen)) {
+        findings.push(finding(`Cambio disponible: ${t.san} (${PIECE_NAMES[t.piece]} por ${PIECE_NAMES[t.captured]})`, [t.from, t.to], diff > 0 ? 'good' : diff < 0 ? 'bad' : 'info'));
+      }
+      const mine = worstPieces(fen, hero)[0];
+      const theirs = worstPieces(fen, enemy).at(-1);
+      if (mine && theirs) findings.push(finding(`Idea: cambiar tu ${pieceLabel(mine)} (poco activa) por la ${pieceLabel(theirs)} (la más activa del rival)`, [mine.square, theirs.square], 'info'));
+      return { yes: findings.length > 0, findings };
     }
     case 'estructura': {
       const breaks = pawnBreaks(fen, hero);

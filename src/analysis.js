@@ -197,7 +197,8 @@ export function evaluateMove(fen, move) {
   if (m.captured) {
     const before = load(fen);
     const wasDefended = defenders(before, m.to, enemy).length > 0;
-    if (!wasDefended) tags.push({ q: 'desprotegidas', text: `captura ${PIECE_NAMES[m.captured]} indefenso/a` });
+    const fem = ['r', 'q'].includes(m.captured);
+    if (!wasDefended) tags.push({ q: 'desprotegidas', text: `captura ${fem ? 'la' : 'el'} ${PIECE_NAMES[m.captured]} ${fem ? 'indefensa' : 'indefenso'}` });
     else if (VALUES[m.captured] > VALUES[m.piece]) tags.push({ q: 'amenazadas', text: `gana material: ${PIECE_NAMES[m.piece]} por ${PIECE_NAMES[m.captured]}` });
     else tags.push({ q: 'amenazadas', text: `captura ${PIECE_NAMES[m.captured]}` });
   }
@@ -337,6 +338,15 @@ export function rookActivity(chess, color) {
   };
 }
 
+/** Capturas que cambian una pieza por otra del mismo valor (no peones). */
+export function availableTrades(fen) {
+  const chess = load(fen);
+  if (!chess) return [];
+  return chess
+    .moves({ verbose: true })
+    .filter((m) => m.captured && m.piece !== 'p' && m.piece !== 'k' && VALUES[m.captured] === VALUES[m.piece]);
+}
+
 /** Rupturas de peón: avances que atacan un peón rival. */
 export function pawnBreaks(fen, color) {
   const chess = load(withTurn(fen, color));
@@ -348,4 +358,150 @@ export function pawnBreaks(fen, color) {
       const p = chess.get(s);
       return p && p.type === 'p' && p.color !== color;
     }));
+}
+
+// --------------------------------------------- Ideas de varias jugadas
+
+const MATE_SCORE = 1000;
+const CHECK_EXTENSION = 4;
+
+function materialFor(chess, color) {
+  let score = 0;
+  for (const row of chess.board()) {
+    for (const p of row) {
+      if (!p || p.type === 'k') continue;
+      score += p.color === color ? VALUES[p.type] : -VALUES[p.type];
+    }
+  }
+  return score;
+}
+
+/**
+ * Búsqueda táctica de jugadas forzadas: el atacante solo juega jaques, capturas
+ * y coronaciones; el defensor responde a todo si está en jaque y, si no, puede
+ * capturar o "plantarse" (quiescencia). Puntuación en material para quien mueve.
+ */
+function forcingSearch(chess, attacker, ply, maxPly, alpha, beta, budget) {
+  budget.nodes++;
+  if ((budget.nodes & 127) === 0 && Date.now() > budget.deadline) budget.nodes = Infinity;
+  const moves = chess.moves({ verbose: true });
+  const toMove = chess.turn();
+  if (!moves.length) return { score: chess.inCheck() ? -MATE_SCORE + ply : 0, pv: [] };
+  const inCheck = chess.inCheck();
+  const stand = materialFor(chess, toMove);
+  const isAttacker = toMove === attacker;
+  // Extensión de jaques: pasada la profundidad, el atacante aún puede seguir dando jaque.
+  const extended = ply >= maxPly;
+  if (!inCheck) {
+    if (stand >= beta || budget.nodes > budget.max || ply >= maxPly + CHECK_EXTENSION || (extended && !isAttacker)) return { score: stand, pv: [] };
+    alpha = Math.max(alpha, stand);
+  } else if (ply >= maxPly + CHECK_EXTENSION + 1 || budget.nodes > budget.max) {
+    return { score: stand, pv: [] };
+  }
+  const candidates = inCheck
+    ? moves
+    : moves.filter((m) => (!extended && (m.captured || m.promotion)) || (isAttacker && m.san.includes('+')));
+  candidates.sort((a, b) => order(b) - order(a));
+  let best = { score: inCheck ? -Infinity : stand, pv: [] };
+  for (const m of candidates) {
+    chess.move(m);
+    const child = forcingSearch(chess, attacker, ply + 1, maxPly, -beta, -alpha, budget);
+    chess.undo();
+    const score = -child.score;
+    if (score > best.score) best = { score, pv: [m, ...child.pv] };
+    if (score > alpha) alpha = score;
+    if (alpha >= beta) break;
+  }
+  return best;
+}
+
+function order(m) {
+  return (m.san.includes('#') ? 1000 : 0) + (m.san.includes('+') ? 50 : 0) + (m.captured ? 10 * VALUES[m.captured] - VALUES[m.piece] : 0) + (m.promotion ? 80 : 0);
+}
+
+/** Qué se consigue en cada paso de la línea (para explicar la idea). */
+function describeStep(fen, move) {
+  const ev = evaluateMove(fen, move);
+  if (!ev) return [];
+  const notes = ev.tags.filter((t) => t.text !== 'da jaque').map((t) => t.text);
+  // Sacrificio: la pieza queda donde el rival la puede capturar con ventaja.
+  if (!ev.move.captured && ev.warnings.some((w) => w.includes(`de ${ev.move.to} `))) notes.unshift('sacrificio');
+  if (ev.san.includes('+') && !ev.mate) notes.push('da jaque');
+  return notes;
+}
+
+/**
+ * Busca una idea forzada que empiece con `firstMove` (o con cualquier jaque o
+ * captura si no se indica) y gane material o dé mate en varias jugadas.
+ * Devuelve { line: [{san, uci, notes, by}], gain, mate } o null.
+ */
+export function findForcingIdea(fen, { firstMove, maxPly = 7, maxNodes = 40000, maxMs = 400, minGain = 2 } = {}) {
+  const chess = load(fen);
+  if (!chess) return null;
+  const attacker = chess.turn();
+  const base = materialFor(chess, attacker);
+  const roots = firstMove
+    ? chess.moves({ verbose: true }).filter((m) => m.from === firstMove.from && m.to === firstMove.to && (!firstMove.promotion || m.promotion === firstMove.promotion))
+    : chess.moves({ verbose: true }).filter((m) => m.captured || m.promotion || m.san.includes('+'));
+  roots.sort((a, b) => order(b) - order(a));
+  let best = null;
+  const budget = { nodes: 0, max: maxNodes, deadline: Date.now() + maxMs };
+  for (const m of roots) {
+    chess.move(m);
+    const child = forcingSearch(chess, attacker, 1, maxPly, -Infinity, Infinity, budget);
+    chess.undo();
+    const score = -child.score;
+    if (!best || score > best.score) best = { score, pv: [m, ...child.pv] };
+  }
+  if (!best) return null;
+  const mate = best.score > MATE_SCORE / 2;
+  const gain = mate ? Infinity : best.score - base;
+  // Una idea "de varias jugadas" necesita al menos dos jugadas propias.
+  if ((!mate && gain < minGain) || best.pv.length < 3) return null;
+  return describeLine(fen, best.pv.map((m) => m.from + m.to + (m.promotion ?? '')));
+}
+
+/**
+ * Explica una línea (UCI) desde `fen`: qué consigue cada jugada propia y el
+ * resultado. Recorta las jugadas sobrantes una vez conseguida la ganancia.
+ */
+export function describeLine(fen, ucis) {
+  const chess = load(fen);
+  if (!chess) return null;
+  const attacker = chess.turn();
+  const base = materialFor(chess, attacker);
+  const line = [];
+  const gains = [];
+  for (const uci of ucis) {
+    const by = chess.turn() === attacker ? 'you' : 'rival';
+    const before = chess.fen();
+    let m;
+    try {
+      m = chess.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+    } catch {
+      break;
+    }
+    line.push({ san: m.san, uci, notes: by === 'you' ? describeStep(before, uci) : [], by });
+    gains.push(materialFor(chess, attacker) - base);
+  }
+  const mate = chess.isCheckmate() && chess.turn() !== attacker;
+  const gain = mate ? Infinity : gains.at(-1) ?? 0;
+  if (!mate) {
+    // Corta tras la primera jugada propia que ya alcanza la ganancia final.
+    const cut = gains.findIndex((g, i) => line[i].by === 'you' && g >= gain);
+    if (cut >= 0) line.splice(cut + 1);
+  }
+  return { line, gain, mate, moves: Math.ceil(line.length / 2) };
+}
+
+/** Texto corto de una idea: "Qf1+ (da jaque) Kh2 Rf2+ (…) … → gana 4 puntos de material". */
+export function describeIdea(idea, { moves = true } = {}) {
+  const result = idea.mate ? 'mate' : `ganas ${idea.gain} punto(s) de material`;
+  if (!moves) {
+    // Solo el patrón (sin desvelar las jugadas): "da jaque → ataque doble → …".
+    const pattern = idea.line.filter((s) => s.by === 'you').map((s) => (s.notes[0] ?? 'jugada tranquila').replace(/ \(.*\)$/, ''));
+    return `${pattern.join(' → ')} → ${result}`;
+  }
+  const steps = idea.line.map((s) => (s.notes.length ? `${s.san} (${s.notes.slice(0, 2).join(', ')})` : s.san)).join(' ');
+  return `${steps} → ${result}`;
 }
