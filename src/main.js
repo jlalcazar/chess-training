@@ -130,7 +130,11 @@ function renderSettings() {
   );
 }
 
+// Cada carga tiene su número: una respuesta o animación de un ejercicio anterior no toca el actual.
+let loadSeq = 0;
+
 async function loadPuzzle(source) {
+  const request = ++loadSeq;
   stopTimer();
   cancelEngine();
   panel.replaceChildren(h('p', { class: 'muted' }, 'Pidiendo un ejercicio a Lichess…'));
@@ -141,6 +145,7 @@ async function loadPuzzle(source) {
         : source
           ? await fetchPuzzleById(source)
           : await fetchNextPuzzle({ angle: settings.angle, difficulty: settings.difficulty });
+    if (request !== loadSeq) return;
     log('puzzle', puzzle);
     state = newState(puzzle);
     // Muestra la posición anterior y luego la jugada del rival, como en Lichess.
@@ -148,12 +153,15 @@ async function loadPuzzle(source) {
     board.setMarks({});
     board.setArrows([]);
     board.setPosition(puzzle.fenBefore, { orientation: puzzle.heroColor });
+    const current = state;
     setTimeout(() => {
+      if (state !== current) return;
       board.setPosition(puzzle.fen, { orientation: puzzle.heroColor, lastMove: puzzle.lastMove });
       render();
     }, 700);
     panel.replaceChildren(h('p', { class: 'muted' }, `El rival juega ${puzzle.lastMove?.san ?? ''}…`));
   } catch (err) {
+    if (request !== loadSeq) return;
     console.error(err);
     panel.replaceChildren(
       h('div', { class: 'error' }, h('strong', {}, 'No se pudo cargar el ejercicio. '), err.message),
@@ -200,6 +208,8 @@ function render() {
 
 function syncBoard() {
   const { step } = state;
+  // El tablero siempre refleja la posición del ejercicio actual (salvo en el repaso, que navega).
+  if (step !== 'resumen') board.setPosition(state.playFen, { orientation: state.puzzle.heroColor, lastMove: state.lastMove });
   board.setInteractive(['candidatas', 'intuicion', 'decision', 'resolver'].includes(step) && !(step === 'resolver' && state.ply >= state.puzzle.solution.length));
   if (step === 'candidatas' || step === 'decision') {
     board.setArrows(state.candidates.map((c) => ({ from: c.move.from, to: c.move.to, tone: 'candidate' })));
@@ -646,7 +656,9 @@ function playUserMove(move) {
   }
   render();
   board.setInteractive(false);
+  const current = state;
   setTimeout(() => {
+    if (state !== current || current.revealed) return;
     const reply = chess.move(uciToMove(puzzle.solution[state.ply]));
     state.ply++;
     state.playFen = chess.fen();
@@ -666,7 +678,9 @@ function revealSolution() {
   let i = 0;
   const replay = load(state.playFen);
   board.setInteractive(false);
+  const current = state;
   const stepFn = () => {
+    if (state !== current) return;
     if (i >= rest.length) {
       state.playFen = replay.fen();
       state.ply = state.puzzle.solution.length;
