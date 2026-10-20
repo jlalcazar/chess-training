@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/pieces/cburnett/wN.svg" />
+    <title>Entrenador de pensamiento</title>
+  </head>
+  <body>
+    <header>
+      <h1>♞ Entrenador de pensamiento ajedrecístico</h1>
+      <div id="settings" class="settings"></div>
+    </header>
+    <main>
+      <div class="board-wrap"><div id="board"></div><div id="board-nav" class="board-nav" hidden></div></div>
+      <div id="panel" class="panel"></div>
+    </main>
+    <footer class="muted small">
+      Ejercicios de la <a href="https://lichess.org/api" target="_blank" rel="noopener">API pública de Lichess</a>. El análisis es heurístico (sin motor): sirve para guiar el proceso, no como evaluación exacta.
+    </footer>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
