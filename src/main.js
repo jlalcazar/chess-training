@@ -80,6 +80,7 @@ function newState(puzzle) {
     step: settings.mode === 'tiempo' ? (settings.breathing ? 'calma' : 'candidatas') : 'intuicion',
     candidates: [],
     addingCandidate: false, // en Decisión: el próximo movimiento en el tablero se apunta, no se juega
+    notice: null, // aviso de una sola vez (candidata repetida…): se borra al redibujar
     intuition: null,
     questionIndex: 0,
     answers: {}, // id -> { user: boolean, result }
@@ -207,6 +208,7 @@ function render() {
 
   const views = { calma, candidatas, tactica, estrategia, decision, resolver, resumen, intuicion, comprobacion, remate };
   panel.replaceChildren(header, stepper, views[state.step]());
+  state.notice = null;
   if (DEBUG) panel.append(h('details', { class: 'debug' }, h('summary', {}, 'Depuración'), h('pre', {}, JSON.stringify({ ...state, plan: undefined }, null, 2))));
   syncBoard();
 }
@@ -465,9 +467,12 @@ function evaluateWithIdea(fen, move) {
 }
 
 function addCandidate(move) {
-  const full = withPromotion(move, 0);
+  const full = withDefaultPromotion(state.puzzle.fen, move);
   const uci = full.from + full.to + (full.promotion ?? '');
-  if (state.candidates.length < MAX_CANDIDATES && !state.candidates.some((c) => c.uci === uci)) {
+  const repeated = state.candidates.find((c) => c.uci === uci);
+  if (repeated) state.notice = `${repeated.san} ya está entre tus candidatas.`;
+  else if (state.candidates.length >= MAX_CANDIDATES) state.notice = `Ya tienes ${MAX_CANDIDATES} candidatas: quita una para apuntar otra.`;
+  else {
     const ev = evaluateWithIdea(state.puzzle.fen, full);
     if (ev) state.candidates.push(ev);
   }
@@ -477,6 +482,10 @@ function addCandidate(move) {
 function removeCandidate(i) {
   state.candidates.splice(i, 1);
   render();
+}
+
+function noticeView() {
+  return state.notice ? h('p', { class: 'notice small' }, state.notice) : null;
 }
 
 function candidateList(removable) {
@@ -504,6 +513,7 @@ function candidatas() {
     h('h2', {}, `2. Hasta ${MAX_CANDIDATES} jugadas candidatas, sin calcular`),
     h('p', {}, 'Mueve en el tablero las jugadas que se te ocurran (no se juegan, solo se apuntan). No entres en variantes todavía: muchos cálculos acaban en líneas que nunca aparecen.'),
     candidateList(true),
+    noticeView(),
     sweep ? sweepView(sweep) : null,
     h('div', { class: 'actions' },
       sweep
@@ -667,12 +677,12 @@ function decision() {
     state.candidates.length
       ? h('table', { class: 'decision' }, h('thead', {}, h('tr', {}, h('th', {}, 'Jugada'), h('th', {}, 'Síes'), h('th', {}, 'Qué consigue'), h('th', {}))), h('tbody', {}, rows))
       : h('p', { class: 'muted' }, 'No apuntaste candidatas.'),
+    noticeView(),
     h('div', { class: 'actions' },
       h('button', {
         class: adding ? 'toggle on' : 'toggle',
         'aria-pressed': String(adding),
         disabled: full,
-        title: full ? `Máximo ${MAX_CANDIDATES} candidatas: quita una para añadir otra` : null,
         onClick: () => { state.addingCandidate = !state.addingCandidate; render(); },
       }, adding ? 'Cancelar (no añadir)' : `Añadir candidata (${state.candidates.length}/${MAX_CANDIDATES})`),
     ),
@@ -735,7 +745,7 @@ function onBoardMove(move) {
     case 'candidatas':
       return addCandidate(move);
     case 'intuicion': {
-      const ev = evaluateWithIdea(state.puzzle.fen, withPromotion(move, 0));
+      const ev = evaluateWithIdea(state.puzzle.fen, withDefaultPromotion(state.puzzle.fen, move));
       if (!ev) return;
       state.intuition = ev;
       return go('comprobacion');
@@ -761,14 +771,18 @@ function playFirstMove(move) {
   playUserMove(move);
 }
 
-/** Coronación: usa la pieza de la solución si coincide la jugada; si no, dama. */
+/** Coronación sin mirar la solución: la pieza indicada o dama (el tablero no deja elegir). */
+function withDefaultPromotion(fen, move) {
+  const piece = load(fen).get(move.from);
+  if (piece?.type === 'p' && (move.to[1] === '8' || move.to[1] === '1')) return { from: move.from, to: move.to, promotion: move.promotion ?? 'q' };
+  return { from: move.from, to: move.to };
+}
+
+/** Al jugar: usa la pieza de la solución si coincide la jugada; si no, dama. */
 function withPromotion(move, ply) {
   const expected = state.puzzle.solution[ply];
   if (expected && expected.startsWith(move.from + move.to) && expected[4]) return { ...move, promotion: expected[4] };
-  const chess = load(state.playFen);
-  const piece = chess.get(move.from);
-  if (piece?.type === 'p' && (move.to[1] === '8' || move.to[1] === '1')) return { ...move, promotion: move.promotion ?? 'q' };
-  return { from: move.from, to: move.to };
+  return withDefaultPromotion(state.playFen, move);
 }
 
 function playUserMove(move) {
