@@ -376,6 +376,158 @@ export function isEndgame(chess) {
   return m.queens === 0 || (m.nonPawn.w <= 13 && m.nonPawn.b <= 13);
 }
 
+// ------------------------------------------ Mapa de casillas y rutas
+
+const relRank = (sq, color) => (color === 'w' ? Number(sq[1]) : 9 - Number(sq[1]));
+const ALL_SQUARES = [...FILES].flatMap((f) => [1, 2, 3, 4, 5, 6, 7, 8].map((r) => f + r));
+
+/**
+ * Quién controla cada casilla: número de atacantes de cada bando y el dueño
+ * ('w', 'b', 'contested' o null). Con empate de atacantes manda quien ataca
+ * con la pieza de menos valor (un peón controla aunque le ataquen dos piezas).
+ */
+export function squareControl(chess) {
+  const out = {};
+  for (const sq of ALL_SQUARES) {
+    const w = chess.attackers(sq, 'w');
+    const b = chess.attackers(sq, 'b');
+    const cheapest = (list) => Math.min(...list.map((s) => VALUES[chess.get(s).type]));
+    let owner = null;
+    if (w.length || b.length) {
+      if (!b.length) owner = 'w';
+      else if (!w.length) owner = 'b';
+      else if (cheapest(w) < cheapest(b)) owner = 'w';
+      else if (cheapest(b) < cheapest(w)) owner = 'b';
+      else owner = w.length > b.length ? 'w' : b.length > w.length ? 'b' : 'contested';
+    }
+    out[sq] = { w: w.length, b: b.length, owner };
+  }
+  return out;
+}
+
+/** ¿Puede algún peón de `color` llegar a defender `sq` (está en una columna vecina y por detrás)? */
+function pawnCanCover(chess, sq, color) {
+  const [f] = coords(sq);
+  const r = relRank(sq, color);
+  return allPieces(chess).some((p) => p.type === 'p' && p.color === color && Math.abs(coords(p.square)[0] - f) === 1 && relRank(p.square, color) < r);
+}
+
+/**
+ * Agujeros de `color`: casillas de su campo y del centro (filas 3 a 5 vistas
+ * desde su lado) que ningún peón propio puede ya defender. Primero las
+ * centrales y las cercanas al rey.
+ */
+export function holes(chess, color) {
+  if (!allPieces(chess).some((p) => p.type === 'p' && p.color === color)) return [];
+  const king = allPieces(chess).find((p) => p.type === 'k' && p.color === color);
+  const [kf] = king ? coords(king.square) : [4];
+  const weight = (sq) => {
+    const [f] = coords(sq);
+    return Math.abs(f - 3.5) + Math.min(Math.abs(f - kf), 3) - (chess.get(sq)?.color === other(color) ? 2 : 0);
+  };
+  return ALL_SQUARES.filter((sq) => {
+    const r = relRank(sq, color);
+    if (r < 3 || r > 5) return false;
+    const p = chess.get(sq);
+    if (p?.type === 'p' && p.color === color) return false;
+    return !pawnCanCover(chess, sq, color);
+  }).sort((a, b) => weight(a) - weight(b));
+}
+
+/**
+ * Puestos avanzados de `color`: casillas en las filas 4 a 6 (desde su lado)
+ * defendidas por un peón propio que ningún peón rival puede atacar.
+ */
+export function outposts(chess, color) {
+  return ALL_SQUARES.filter((sq) => {
+    const r = relRank(sq, color);
+    if (r < 4 || r > 6) return false;
+    const p = chess.get(sq);
+    if (p && (p.type === 'p' || p.color !== color)) return false;
+    const pawnDefended = chess.attackers(sq, color).some((s) => chess.get(s).type === 'p');
+    return pawnDefended && !pawnCanCover(chess, sq, other(color));
+  });
+}
+
+const STEPS = { n: KNIGHT_JUMPS, b: DIAGONAL, r: ORTHOGONAL, q: [...DIAGONAL, ...ORTHOGONAL], k: [...DIAGONAL, ...ORTHOGONAL] };
+
+/** Casillas a las que iría una pieza desde `from` sin mover nada más (pseudolegal). */
+function pieceSteps(chess, from, piece) {
+  const [f, r] = coords(from);
+  const out = [];
+  const slides = ['b', 'r', 'q'].includes(piece.type);
+  for (const [df, dr] of STEPS[piece.type] ?? []) {
+    for (let i = 1; ; i++) {
+      const sq = toSquare(f + df * i, r + dr * i);
+      if (!sq) break;
+      const p = chess.get(sq);
+      if (p && p.color === piece.color) break;
+      out.push({ sq, capture: Boolean(p) });
+      if (p || !slides) break;
+    }
+  }
+  return out;
+}
+
+/** ¿Es peligrosa la casilla para esta pieza? Atacada por un peón, por algo de menos valor o sin defensa. */
+function dangerousFor(chess, sq, piece) {
+  const enemy = other(piece.color);
+  const attackers = chess.attackers(sq, enemy);
+  if (!attackers.length) return null;
+  const cheapest = Math.min(...attackers.map((s) => VALUES[chess.get(s).type]));
+  if (cheapest < VALUES[piece.type]) return cheapest === 1 ? 'la ataca un peón' : 'la ataca una pieza de menos valor';
+  if (!chess.attackers(sq, piece.color).length) return 'está atacada y sin defensa';
+  return null;
+}
+
+/**
+ * Rutas de una pieza moviendo solo esa pieza (búsqueda en anchura hasta
+ * `maxMoves` jugadas). Para cada casilla alcanzable: el camino, el número de
+ * tiempos y las casillas peligrosas por las que pasa. `best` son las 3 mejores
+ * casillas (actividad desde allí, centralización, puestos avanzados y
+ * ataques a piezas rivales, menos el peligro).
+ */
+export function pieceRoutes(fen, from, { maxMoves = 3, to } = {}) {
+  const chess = load(fen);
+  const piece = chess?.get(from);
+  if (!piece || !STEPS[piece.type]) return { routes: {}, best: [], to: null };
+  // Sin la pieza en su casilla, para que no se bloquee a sí misma.
+  const board = new Chess(fen, { skipValidation: true });
+  board.remove(from);
+  const routes = { [from]: { path: [from], moves: 0, dangers: [] } };
+  let frontier = [from];
+  for (let d = 1; d <= maxMoves && frontier.length; d++) {
+    const next = [];
+    for (const sq of frontier) {
+      for (const step of pieceSteps(board, sq, piece)) {
+        if (routes[step.sq]) continue;
+        const danger = dangerousFor(board, step.sq, piece);
+        const prev = routes[sq];
+        routes[step.sq] = { path: [...prev.path, step.sq], moves: d, dangers: danger ? [...prev.dangers, { sq: step.sq, why: danger }] : prev.dangers, capture: step.capture };
+        // Una captura termina la ruta: más allá el tablero ya no es el mismo.
+        if (!step.capture) next.push(step.sq);
+      }
+    }
+    frontier = next;
+  }
+  const outs = new Set(outposts(chess, piece.color));
+  const score = (sq) => {
+    const r = routes[sq];
+    const [f, rk] = coords(sq);
+    const mobility = pieceSteps(board, sq, piece).length;
+    const center = 3.5 - Math.max(Math.abs(f - 3.5), Math.abs(rk - 3.5));
+    const hits = pieceSteps(board, sq, piece).filter((s) => s.capture && board.get(s.sq).color !== piece.color).length;
+    const ownDanger = dangerousFor(board, sq, piece) ? 4 : 0;
+    return mobility + center + (outs.has(sq) ? 3 : 0) + hits * 1.5 - ownDanger - r.moves * 0.5 - r.dangers.length;
+  };
+  const best = Object.keys(routes)
+    .filter((sq) => sq !== from && !routes[sq].capture)
+    .map((sq) => ({ sq, ...routes[sq], score: score(sq), outpost: outs.has(sq) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3);
+  return { routes, best, to: to ? routes[to] ?? null : null, piece: { ...piece, square: from } };
+}
+
 /** Las jugadas más peligrosas del rival si le tocara mover ahora. */
 export function rivalIdeas(fen, color, limit = 4) {
   const enemy = other(color);
