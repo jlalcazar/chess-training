@@ -181,6 +181,7 @@ function go(step) {
   state.step = step;
   state.questionIndex = 0;
   state.feedback = null;
+  state.addingCandidate = false;
   log('step', step);
   render();
 }
@@ -464,8 +465,17 @@ function evaluateWithIdea(fen, move) {
 }
 
 function addCandidate(move) {
-  const ev = evaluateWithIdea(state.puzzle.fen, withPromotion(move, 0));
-  if (ev && state.candidates.length < MAX_CANDIDATES && !state.candidates.some((c) => c.uci === ev.uci)) state.candidates.push(ev);
+  const full = withPromotion(move, 0);
+  const uci = full.from + full.to + (full.promotion ?? '');
+  if (state.candidates.length < MAX_CANDIDATES && !state.candidates.some((c) => c.uci === uci)) {
+    const ev = evaluateWithIdea(state.puzzle.fen, full);
+    if (ev) state.candidates.push(ev);
+  }
+  render();
+}
+
+function removeCandidate(i) {
+  state.candidates.splice(i, 1);
   render();
 }
 
@@ -480,13 +490,7 @@ function candidateList(removable) {
         {},
         h('strong', {}, c.san),
         removable &&
-          h('button', {
-            class: 'link',
-            onClick: () => {
-              state.candidates.splice(i, 1);
-              render();
-            },
-          }, 'quitar'),
+          h('button', { class: 'link', onClick: () => removeCandidate(i) }, 'quitar'),
       ),
     ),
   );
@@ -650,8 +654,8 @@ function decision() {
       h('td', {}, c.tags.length ? h('ul', {}, c.tags.map((t) => h('li', {}, t.text))) : h('span', { class: 'muted' }, '—'),
         c.warnings.length ? h('ul', { class: 'warnings' }, c.warnings.map((w) => h('li', {}, `⚠ ${w}`))) : null),
       h('td', {},
-        h('button', { class: 'primary', onClick: () => playDecision(c.move) }, 'Jugar'),
-        h('button', { class: 'link', onClick: () => { state.candidates.splice(i, 1); render(); } }, 'quitar'),
+        h('button', { class: 'primary', onClick: () => playFirstMove(c.move) }, 'Jugar'),
+        h('button', { class: 'link', onClick: () => removeCandidate(i) }, 'quitar'),
       ),
     ),
   );
@@ -666,7 +670,7 @@ function decision() {
     h('div', { class: 'actions' },
       h('button', {
         class: adding ? 'toggle on' : 'toggle',
-        'aria-pressed': adding ? 'true' : 'false',
+        'aria-pressed': String(adding),
         disabled: full,
         title: full ? `Máximo ${MAX_CANDIDATES} candidatas: quita una para añadir otra` : null,
         onClick: () => { state.addingCandidate = !state.addingCandidate; render(); },
@@ -678,12 +682,6 @@ function decision() {
         ? `Ya tienes ${MAX_CANDIDATES} candidatas: quita una para apuntar otra. Una jugada en el tablero se juega directamente.`
         : 'Una jugada en el tablero se juega directamente. Para apuntarla antes como candidata, pulsa "Añadir candidata".'),
   );
-}
-
-function playDecision(move) {
-  state.addingCandidate = false;
-  go('resolver');
-  playUserMove(move);
 }
 
 // ------------------------------------------------------- modo sin tiempo
@@ -743,12 +741,11 @@ function onBoardMove(move) {
       return go('comprobacion');
     }
     case 'decision':
-      if (!state.addingCandidate) return playDecision(move);
+      if (!state.addingCandidate) return playFirstMove(move);
       state.addingCandidate = false;
       return addCandidate(move);
     case 'comprobacion':
-      go('resolver');
-      return playUserMove(move);
+      return playFirstMove(move);
     case 'resolver':
       return playUserMove(move);
     case 'remate':
@@ -756,6 +753,12 @@ function onBoardMove(move) {
     default:
       return undefined;
   }
+}
+
+/** Primera jugada del ejercicio, desde Decisión o Comprobar. */
+function playFirstMove(move) {
+  go('resolver');
+  playUserMove(move);
 }
 
 /** Coronación: usa la pieza de la solución si coincide la jugada; si no, dama. */
