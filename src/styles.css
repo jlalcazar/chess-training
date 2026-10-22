@@ -336,3 +336,8 @@ line.arrow-muted, path.arrow-muted { stroke: #888; fill: #888; }
 .options { list-style: none; padding: 0; }
 .option-row { padding: 8px 0; border-bottom: 1px solid var(--border); }
 .option-row label { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.findings li.found { background: color-mix(in srgb, var(--good) 10%, transparent); }
+.findings li.missed { background: color-mix(in srgb, var(--bad) 10%, transparent); }
+.routes, .control-map { margin: 10px 0; }
+.routes ul { padding-left: 18px; margin: 4px 0; }
+.routes li { margin: 3px 0; font-size: 0.9rem; }

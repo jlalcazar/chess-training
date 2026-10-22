@@ -2,7 +2,7 @@ import './styles.css';
 import { Chess } from 'chess.js';
 import { Board } from './board.js';
 import { $, h, storage, uciToMove } from './dom.js';
-import { BLIND_SPOTS, COLOR_NAMES, PIECE_NAMES, blindSpots, describeIdea, evaluateMove, explainLine, findForcingIdea, forcingSweep, lastMoveDiff, load, narratePly, withTurn } from './analysis.js';
+import { BLIND_SPOTS, COLOR_NAMES, PIECE_NAMES, blindSpots, describeIdea, evaluateMove, explainLine, findForcingIdea, forcingSweep, holes, lastMoveDiff, load, narratePly, outposts, pieceRoutes, squareControl, withTurn, worstPieces } from './analysis.js';
 import { DEFAULT_DEPTH, ENGINE_SOURCES, StockfishEngine, describeAdvantage, engineMove, evaluateMoves, evaluatePosition, formatScore, pvToSan, toCp, verdict, winChance } from './engine.js';
 import { emptyStats, recordExercise, summarize } from './stats.js';
 import { CONFIDENCE, GLANCE_CASES, GLANCE_SECONDS, glanceCase } from './intuition.js';
@@ -249,6 +249,10 @@ async function loadPuzzle(source, { srs = false } = {}) {
 
 function go(step) {
   stopTimer();
+  state.pointing = null;
+  state.controlShown = false;
+  board.setTints({});
+  board.setLabels({});
   state.step = step;
   state.stepAt = Date.now();
   track('phase', { step });
@@ -591,6 +595,7 @@ function beginPointing() {
       const p = state.pointing;
       const i = p.picks.indexOf(sq);
       if (i >= 0) p.picks.splice(i, 1);
+      else if (p.max && p.picks.length >= p.max) return;
       else p.picks.push(sq);
       board.setMarks(Object.fromEntries(p.picks.map((x) => [x, 'pick'])));
       const counter = document.getElementById('pick-count');
@@ -854,6 +859,18 @@ function sweepView({ mine, theirs }) {
 
 // ------------------------------------------------------- preguntas (táctica)
 
+// Preguntas que se pueden responder señalando en el tablero.
+const POINTABLE = new Set(['mate', 'desprotegidas', 'amenazadas', 'geometria', 'debilidades']);
+// Preguntas en las que se toca una pieza y la casilla donde la quieres.
+const ROUTE_QUESTIONS = new Set(['peorPieza', 'casillas']);
+const POINT_PROMPTS = {
+  mate: 'Juega en el tablero el mate (toca origen y destino), tuyo o del rival. Si no hay, pulsa "No hay nada".',
+  desprotegidas: 'Toca las piezas sin ningún defensor, de los dos colores.',
+  amenazadas: 'Toca las piezas que se pierden en el cambio (de los dos colores): la pieza amenazada, no quien la ataca.',
+  geometria: 'Toca las piezas clavadas, enfiladas o atacadas a la vez (o la casilla del ataque doble), de los dos colores.',
+  debilidades: 'Marca hasta 3 debilidades: peones aislados o doblados, un rey expuesto.',
+};
+
 function questionView(questions, title, intro, onDone) {
   const q = questions[state.questionIndex];
   if (!q) {
@@ -861,6 +878,7 @@ function questionView(questions, title, intro, onDone) {
     return h('div');
   }
   const answer = state.answers[q.id];
+  const pointing = settings.pointAnswers && POINTABLE.has(q.id);
   const children = [
     h('h2', {}, title),
     intro && h('p', { class: 'muted' }, intro),
@@ -868,36 +886,90 @@ function questionView(questions, title, intro, onDone) {
     h('h3', {}, q.text),
     h('p', { class: 'hint' }, q.hint),
   ];
+  const result = () => answerQuestion(q.id, state.puzzle.fen, state.puzzle.heroColor);
   if (!answer) {
+    const askedAt = state.questionAskedAt?.[q.id] ?? Date.now();
+    state.questionAskedAt = { ...state.questionAskedAt, [q.id]: askedAt };
     const pick = (user) => {
-      const result = answerQuestion(q.id, state.puzzle.fen, state.puzzle.heroColor);
-      state.answers[q.id] = { user, result };
+      const r = result();
+      state.answers[q.id] = { user, result: r, ms: Date.now() - askedAt };
       track('answer', { q: q.id, user });
-      log('question', q.id, { user, result });
+      log('question', q.id, { user, result: r });
       render();
-      showFindings(result.findings);
+      showFindings(r.findings);
     };
-    if (q.open) {
+    if (pointing) {
+      if (!state.pointing) beginPointing();
+      if (q.id === 'debilidades') state.pointing.max = 3;
+      children.push(
+        h('p', {}, POINT_PROMPTS[q.id]),
+        pointingControls(() => {
+          const r = result();
+          const pr = endPointing(r.findings);
+          state.answers[q.id] = {
+            user: pr.picks.length > 0,
+            result: r,
+            picks: pr.picks,
+            pointed: { found: pr.found.length, required: pr.required, falseAlarms: pr.falseAlarms.length, ms: pr.ms, correct: pr.correct },
+            pointResult: pr,
+          };
+          track('answer', { q: q.id, user: pr.picks.length > 0, found: pr.found.length, required: pr.required });
+          log('question', q.id, pr);
+          render();
+          showPointingResult(r.findings, pr);
+        }),
+      );
+    } else if (q.open) {
       const note = h('textarea', { rows: 2, placeholder: 'Escribe tu idea (opcional)' });
+      if (ROUTE_QUESTIONS.has(q.id)) {
+        if (!state.pointing) beginPointing();
+        state.pointing.max = 2;
+        children.push(h('p', { class: 'small' }, 'Opcional: toca una de tus piezas y después la casilla donde la quieres. Te enseñaré la ruta.'));
+      }
       children.push(
         h('label', { class: 'block' }, 'Tu respuesta:', note),
-        h('div', { class: 'actions' }, h('button', { class: 'primary', onClick: () => { state.notes = { ...state.notes, [q.id]: note.value }; pick(null); } }, 'Ver el análisis')),
+        h('div', { class: 'actions' }, h('button', {
+          class: 'primary',
+          'data-key': 'enter',
+          onClick: () => {
+            state.notes = { ...state.notes, [q.id]: note.value };
+            const wish = state.pointing?.picks ?? [];
+            state.pointing = null;
+            if (ROUTE_QUESTIONS.has(q.id)) state.routeWish = { ...state.routeWish, [q.id]: wish };
+            pick(null);
+          },
+        }, 'Ver el análisis')),
       );
     } else {
-      children.push(h('div', { class: 'actions' }, h('button', { onClick: () => pick(true) }, 'Sí'), h('button', { onClick: () => pick(false) }, 'No'), h('button', { class: 'link', onClick: () => pick(null) }, 'No lo sé')));
+      children.push(h('div', { class: 'actions' },
+        h('button', { 'data-key': 's', onClick: () => pick(true) }, 'Sí'),
+        h('button', { 'data-key': 'n', onClick: () => pick(false) }, 'No'),
+        h('button', { class: 'link', onClick: () => pick(null) }, 'No lo sé')));
     }
   } else {
-    const { user, result } = answer;
-    const verdict = q.open
-      ? 'Pregunta abierta: no hay respuesta correcta o incorrecta. Contrasta tu idea con esto:'
-      : user === null ? 'Lo importante es hacerse la pregunta. Mira lo que hay:' : user === result.yes ? '¡Bien visto!' : result.yes ? 'Había algo: revisa con calma.' : 'Esta vez no había nada relevante.';
+    const { user, result: r, pointResult } = answer;
+    let verdictText;
+    let ok;
+    if (pointResult) {
+      verdictText = pointingSummary(pointResult);
+      ok = pointResult.correct;
+    } else {
+      verdictText = q.open
+        ? 'Pregunta abierta: no hay respuesta correcta o incorrecta. Contrasta tu idea con esto:'
+        : user === null ? 'Lo importante es hacerse la pregunta. Mira lo que hay:' : user === r.yes ? '¡Bien visto!' : r.yes ? 'Había algo: revisa con calma.' : 'Esta vez no había nada relevante.';
+      ok = q.open || user === r.yes;
+    }
     children.push(
       q.open && state.notes?.[q.id] ? h('p', {}, h('strong', {}, 'Tu idea: '), state.notes[q.id]) : null,
-      h('p', { class: `verdict ${q.open || user === result.yes ? 'ok' : 'ko'}` }, verdict),
-      findingsList(result.findings),
-      h('p', { class: 'muted small' }, 'Pulsa una línea para verla en el tablero. Verde: a tu favor. Rojo: peligro para ti.'),
+      h('p', { class: `verdict ${ok ? 'ok' : 'ko'}` }, verdictText),
+      findingsList(r.findings, pointResult),
+      h('p', { class: 'muted small' }, pointResult
+        ? 'Verde: lo que encontraste. Rojo: lo que se te escapó (con su explicación). Gris: falsas alarmas. Pulsa una línea para verla.'
+        : 'Pulsa una línea para verla en el tablero. Verde: a tu favor. Rojo: peligro para ti.'),
+      q.id === 'debilidades' ? controlMapView() : null,
+      ROUTE_QUESTIONS.has(q.id) ? routeView(q.id) : null,
       h('div', { class: 'actions' },
-        h('button', { class: 'primary', onClick: () => { state.questionIndex++; board.setMarks({}); render(); } }, state.questionIndex + 1 < questions.length ? 'Siguiente pregunta' : 'Continuar'),
+        h('button', { class: 'primary', 'data-key': 'enter', onClick: () => { state.questionIndex++; state.routeShown = null; board.setMarks({}); board.setTints({}); board.setLabels({}); render(); } }, state.questionIndex + 1 < questions.length ? 'Siguiente pregunta' : 'Continuar'),
       ),
     );
     if (state.step === 'tactica' || state.step === 'estrategia') children.push(candidateReminder());
@@ -905,9 +977,70 @@ function questionView(questions, title, intro, onDone) {
   return h('section', {}, ...children);
 }
 
-function findingsList(findings) {
+/** "Ver control": tiñe cada casilla según qué bando la controla, con agujeros y puestos avanzados. */
+function controlMapView() {
+  const on = state.controlShown;
+  const toggle = () => {
+    state.controlShown = !state.controlShown;
+    if (state.controlShown) {
+      const chess = load(state.puzzle.fen);
+      const control = squareControl(chess);
+      const tints = {};
+      for (const [sq, c] of Object.entries(control)) if (c.owner) tints[sq] = c.owner;
+      const hero = state.puzzle.heroColor;
+      for (const c of ['w', 'b']) for (const sq of holes(chess, c).slice(0, 6)) tints[sq] = 'hole';
+      for (const sq of outposts(chess, hero)) tints[sq] = 'outpost';
+      board.setTints(tints);
+    } else board.setTints({});
+    render();
+  };
+  return h('div', { class: 'control-map' },
+    h('button', { 'aria-pressed': String(Boolean(on)), onClick: toggle }, on ? 'Ocultar control' : 'Ver control'),
+    on ? h('p', { class: 'small' }, 'Claro: casillas que controlan las blancas. Oscuro: las negras. Rayado: disputadas. ○ agujero (ningún peón puede defenderla). ★ puesto avanzado para ti.') : null,
+  );
+}
+
+/** Ruta de la pieza: la que elegiste y las 3 mejores casillas según el análisis. */
+function routeView(qid) {
+  const fen = state.puzzle.fen;
+  const hero = state.puzzle.heroColor;
+  const [pieceSq, wishSq] = state.routeWish?.[qid] ?? [];
+  const chess = load(fen);
+  const own = pieceSq && chess.get(pieceSq)?.color === hero ? pieceSq : null;
+  const subject = own ?? worstPieceSquare(fen, hero);
+  if (!subject) return null;
+  const routes = pieceRoutes(fen, subject, { to: own ? wishSq : undefined });
+  if (!routes.piece) return null;
+  const label = `${PIECE_NAMES[routes.piece.type]} de ${subject}`;
+  const show = (r) => {
+    state.routeShown = r.path.join('-');
+    const arrows = r.path.slice(1).map((sq, i) => ({ from: r.path[i], to: sq, tone: 'mine', label: i + 1 }));
+    board.setArrows(arrows);
+    board.setMarks(Object.fromEntries(r.dangers.map((d) => [d.sq, 'bad'])));
+    render();
+  };
+  const describe = (r) => `${r.moves} ${r.moves === 1 ? 'tiempo' : 'tiempos'} (${r.path.join(' → ')})${r.dangers.length ? ` · peligro en ${r.dangers.map((d) => `${d.sq}: ${d.why}`).join('; ')}` : ' · camino seguro'}`;
+  const items = [];
+  if (own && wishSq) {
+    items.push(routes.to
+      ? h('li', {}, h('strong', {}, `Tu idea, ${wishSq}: `), describe(routes.to), ' ', h('button', { class: 'link', onClick: () => show(routes.to) }, 'ver'))
+      : h('li', {}, h('strong', {}, `Tu idea, ${wishSq}: `), 'no llega en 3 jugadas moviendo solo esa pieza.'));
+  }
+  routes.best.forEach((b, i) => items.push(h('li', {}, h('strong', {}, `${i + 1}. ${b.sq}${b.outpost ? ' (puesto avanzado)' : ''}: `), describe(b), ' ', h('button', { class: 'link', onClick: () => show(b) }, 'ver'))));
+  return h('div', { class: 'routes' },
+    h('strong', {}, `Mejores casillas para tu ${label}`),
+    h('ul', {}, items),
+    h('p', { class: 'muted small' }, 'Flechas numeradas: la ruta jugada a jugada. En rojo, las casillas peligrosas del camino.'),
+  );
+}
+
+const worstPieceSquare = (fen, hero) => worstPieces(fen, hero)[0]?.square ?? null;
+
+function findingsList(findings, pointResult) {
   if (!findings.length) return h('p', { class: 'muted' }, 'El análisis no encuentra nada destacable.');
-  return h('ul', { class: 'findings' }, findings.map((f) => h('li', { class: `tone-${f.tone}`, onClick: () => showFindings([f]) }, f.text)));
+  const status = (f) => (!pointResult || !f.targets?.length ? '' : pointResult.found.includes(f) ? ' found' : ' missed');
+  return h('ul', { class: 'findings' }, findings.map((f) => h('li', { class: `tone-${f.tone}${status(f)}`, onClick: () => showFindings([f]) },
+    status(f) === ' found' ? '✔ ' : status(f) === ' missed' ? '✘ ' : '', f.text)));
 }
 
 function showFindings(findings) {
