@@ -2,7 +2,7 @@ import './styles.css';
 import { Chess } from 'chess.js';
 import { Board } from './board.js';
 import { $, h, storage, uciToMove } from './dom.js';
-import { BLIND_SPOTS, COLOR_NAMES, PIECE_NAMES, blindSpots, mateInOne, other, describeIdea, evaluateMove, explainLine, findForcingIdea, forcingSweep, holes, lastMoveDiff, load, narratePly, outposts, pieceRoutes, squareControl, withTurn, worstPieces } from './analysis.js';
+import { BLIND_SPOTS, COLOR_NAMES, PIECE_NAMES, blindSpots, mateInOne, other, seeMove, describeIdea, evaluateMove, explainLine, findForcingIdea, forcingSweep, holes, lastMoveDiff, load, narratePly, outposts, pieceRoutes, squareControl, withTurn, worstPieces } from './analysis.js';
 import { DEFAULT_DEPTH, ENGINE_SOURCES, StockfishEngine, describeAdvantage, engineMove, evaluateMoves, evaluatePosition, formatScore, pvToSan, toCp, verdict, winChance } from './engine.js';
 import { emptyStats, recordExercise, summarize } from './stats.js';
 import { CONFIDENCE, GLANCE_CASES, GLANCE_SECONDS, glanceCase } from './intuition.js';
@@ -283,7 +283,7 @@ function render() {
   const idx = steps.findIndex(([id]) => id === shown);
   const stepper = h('ol', { class: 'stepper' }, steps.map(([id, label], i) => h('li', { class: i < idx ? 'done' : i === idx ? 'current' : '' }, label)));
 
-  const views = { calma, cambios, vistazo, candidatas, tactica, estrategia, decision, resolver, resumen, intuicion, comprobacion, remate };
+  const views = { calma, cambios, vistazo, candidatas, tactica, estrategia, decision, permite, resolver, resumen, intuicion, comprobacion, remate };
   panel.replaceChildren(header, stepper, views[state.step]());
   if (DEBUG) panel.append(h('details', { class: 'debug' }, h('summary', {}, 'Depuración'), h('pre', {}, JSON.stringify({ ...state, plan: undefined }, null, 2))));
   syncBoard();
@@ -312,8 +312,9 @@ function syncBoard() {
     renderBoardNav();
     return;
   }
-  if (step !== 'resumen') board.setPosition(state.playFen, { orientation: state.puzzle.heroColor, lastMove: state.lastMove });
-  board.setInteractive((['candidatas', 'intuicion', 'decision', 'resolver'].includes(step) || (step === 'vistazo' && !state.glance)) && !(step === 'resolver' && (state.revealed || state.ply >= state.puzzle.solution.length)));
+  if (step === 'permite') board.setPosition(state.safety.fenAfter, { orientation: state.puzzle.heroColor, lastMove: state.safety.lastMove });
+  else if (step !== 'resumen') board.setPosition(state.playFen, { orientation: state.puzzle.heroColor, lastMove: state.lastMove });
+  board.setInteractive((['candidatas', 'intuicion', 'decision', 'resolver'].includes(step) || (step === 'vistazo' && !state.glance) || (step === 'permite' && state.safety?.guess === undefined)) && !(step === 'resolver' && (state.revealed || state.ply >= state.puzzle.solution.length)));
   board.setPickMode(Boolean(state.pointing));
   if (step === 'candidatas' || step === 'decision') {
     board.setArrows(state.candidates.map((c) => ({ from: c.move.from, to: c.move.to, tone: 'candidate' })));
@@ -354,6 +355,8 @@ function clickMode() {
       return state.addingCandidate ? { kind: 'candidate', text: 'Clic: apuntar candidata (no se juega)' } : { kind: 'move', text: 'Clic: jugar' };
     case 'comprobacion':
       return { kind: 'move', text: 'Clic: jugar' };
+    case 'permite':
+      return state.safety?.guess === undefined ? { kind: 'rival', text: 'Clic: juega la respuesta del rival que más te preocupa' } : { kind: 'none', text: 'El tablero está quieto' };
     case 'resolver':
       if (state.revealed || state.ply >= state.puzzle.solution.length) return { kind: 'none', text: 'El tablero está quieto' };
       if (state.predict) return { kind: 'rival', text: 'Clic: juega la respuesta que esperas del rival' };
@@ -1093,7 +1096,10 @@ function decision() {
       h('td', {}, h('strong', {}, c.san)),
       h('td', { class: 'yes' }, String(c.yesCount)),
       h('td', {}, c.tags.length ? h('ul', {}, c.tags.map((t) => h('li', {}, t.text))) : h('span', { class: 'muted' }, '—'),
-        c.warnings.length ? h('ul', { class: 'warnings' }, c.warnings.map((w) => h('li', {}, `⚠ ${w}`))) : null),
+        // Los avisos solo se ven después de comprobar tú qué permite la jugada.
+        !settings.safetyCheck || state.checked?.has(c.uci)
+          ? (c.warnings.length ? h('ul', { class: 'warnings' }, c.warnings.map((w) => h('li', {}, `⚠ ${w}`))) : null)
+          : h('div', { class: 'muted small' }, 'Avisos: se ven tras «¿Qué permite?»')),
       h('td', {},
         h('button', { class: 'primary', onClick: () => playDecision(c.move) }, 'Jugar'),
         h('button', { class: 'link', onClick: () => { track('removeCandidate', { uci: c.uci }); state.candidates.splice(i, 1); render(); } }, 'quitar'),
@@ -1127,8 +1133,125 @@ function decision() {
 
 function playDecision(move) {
   state.addingCandidate = false;
+  if (settings.safetyCheck && !state.safetySkip) return startSafety(move, 'decision');
   go('resolver');
   playUserMove(move);
+}
+
+// ---------------------------------------------- ¿qué permite mi jugada?
+
+/** Antes de jugar: la posición tras tu jugada, con el rival al turno. */
+function startSafety(move, from) {
+  const full = withPromotion(move, 0);
+  const chess = load(state.puzzle.fen);
+  let m;
+  try {
+    m = chess.move(full);
+  } catch {
+    return undefined;
+  }
+  state.safety = { move: full, uci: m.from + m.to + (m.promotion ?? ''), san: m.san, fenAfter: chess.fen(), lastMove: { from: m.from, to: m.to }, from, guess: undefined, shown: false };
+  return go('permite');
+}
+
+/** Lo que el rival puede hacer tras tu jugada: jaques, capturas, amenazas, mate en 1 e idea forzada. */
+function safetyAnalysis(fenAfter) {
+  const chess = load(fenAfter);
+  const sweep = forcingSweep(fenAfter);
+  const mates = chess.moves({ verbose: true }).filter((m) => m.san.endsWith('#'));
+  const idea = mates.length ? null : findForcingIdea(fenAfter, { maxMs: 300 });
+  const winning = sweep.captures.map((m) => ({ m, gain: seeMove(chess, m) })).filter((x) => x.gain > 0).sort((a, b) => b.gain - a.gain);
+  // La respuesta más peligrosa: mate, idea forzada, captura que gana material o jaque.
+  const worst = mates[0] ? { uci: uciOf(mates[0]), san: mates[0].san, why: 'da mate' }
+    : idea ? { uci: idea.line[0].uci, san: idea.line[0].san, why: describeIdea(idea, { moves: true }) }
+      : winning[0] ? { uci: uciOf(winning[0].m), san: winning[0].m.san, why: `gana ${winning[0].gain} punto(s) en el cambio` }
+        : null;
+  const forcing = new Set([...sweep.checks, ...sweep.captures, ...sweep.threats, ...mates].map(uciOf));
+  return { sweep, mates, idea, worst, forcing };
+}
+
+const uciOf = (m) => m.from + m.to + (m.promotion ?? '');
+
+function permite() {
+  const sf = state.safety;
+  const done = sf.guess !== undefined;
+  const children = [
+    h('h2', {}, `¿Qué permite ${sf.san}?`),
+    h('p', {}, `El tablero muestra la posición tras ${sf.san}, con el rival al turno. Juega la respuesta del rival que más te preocupa o pulsa «No veo nada peligroso».`),
+  ];
+  if (!done) {
+    children.push(h('div', { class: 'actions' },
+      h('button', { 'data-key': 'n', onClick: () => safetyGuess(null) }, 'No veo nada peligroso'),
+      h('button', { class: 'link', onClick: () => leaveSafety(false) }, 'Cambiar de jugada'),
+    ));
+    return h('section', {}, ...children);
+  }
+  const a = sf.analysis;
+  const ev = evaluateMove(state.puzzle.fen, sf.move);
+  const guessSan = sf.guess?.san;
+  let verdictEl;
+  if (!a.worst) {
+    verdictEl = h('p', { class: 'ok' }, guessSan ? `Temías ${guessSan}: no hay nada realmente peligroso.` : 'Correcto: el rival no tiene nada peligroso.');
+  } else if (sf.guess?.uci === a.worst.uci) {
+    verdictEl = h('p', { class: 'ok' }, `Temías ${guessSan}: bien visto, es lo más peligroso (${a.worst.why}).`);
+  } else if (sf.guess && a.forcing.has(sf.guess.uci)) {
+    verdictEl = h('p', { class: 'ko' }, `Temías ${guessSan}: bien mirado, pero lo más peligroso es ${a.worst.san} (${a.worst.why}).`);
+  } else {
+    verdictEl = h('p', { class: 'ko' }, `No miraste ${a.worst.san}: ${a.worst.why}.`);
+  }
+  const n = (list) => list.length;
+  children.push(
+    verdictEl,
+    h('p', {}, h('strong', {}, 'El rival tiene: '), `${n(a.sweep.checks)} jaque(s), ${n(a.sweep.captures)} captura(s) y ${n(a.sweep.threats)} amenaza(s)`,
+      a.mates.length ? `; ¡${a.mates.length === 1 ? 'un mate' : `${a.mates.length} mates`} en 1!` : '; ningún mate en 1',
+      a.idea ? '; y una idea forzada.' : '.'),
+    sf.shown
+      ? h('ul', { class: 'safety-list' },
+        a.mates.length ? h('li', { class: 'ko' }, `Mate: ${a.mates.map((m) => m.san).join(', ')}`) : null,
+        a.idea ? h('li', { class: 'ko' }, `Idea forzada: ${describeIdea(a.idea, { moves: true })}`) : null,
+        n(a.sweep.checks) ? h('li', {}, `Jaques: ${a.sweep.checks.map((m) => m.san).join(', ')}`) : null,
+        n(a.sweep.captures) ? h('li', {}, `Capturas: ${a.sweep.captures.map((m) => m.san).join(', ')}`) : null,
+        n(a.sweep.threats) ? h('li', {}, `Amenazas: ${a.sweep.threats.map((m) => m.san).join(', ')}`) : null)
+      : h('div', { class: 'actions' }, h('button', { onClick: () => { sf.shown = true; render(); } }, 'Ver cuáles')),
+    ev.warnings.length ? h('ul', { class: 'warnings' }, ev.warnings.map((w) => h('li', {}, `⚠ ${w}`))) : h('p', { class: 'muted small' }, 'Tu jugada no deja nada colgado a simple vista.'),
+    h('div', { class: 'actions' },
+      h('button', { class: 'primary', 'data-key': 'p', onClick: () => leaveSafety(true) }, `Jugar ${sf.san} igualmente`),
+      h('button', { onClick: () => leaveSafety(false) }, 'Cambiar de jugada'),
+    ),
+  );
+  return h('section', {}, ...children);
+}
+
+/** Tu respuesta: la jugada del rival que temías (o null: "no veo nada"). */
+function safetyGuess(move) {
+  const sf = state.safety;
+  let guess = null;
+  if (move) {
+    const chess = load(sf.fenAfter);
+    try {
+      const m = chess.move({ ...move, promotion: move.promotion ?? 'q' });
+      guess = { uci: uciOf(m), san: m.san };
+    } catch {
+      return;
+    }
+  }
+  sf.guess = guess;
+  sf.analysis = safetyAnalysis(sf.fenAfter);
+  state.checked = new Set([...(state.checked ?? []), sf.uci]);
+  const ok = !sf.analysis.worst || guess?.uci === sf.analysis.worst.uci;
+  state.safetyLog = [...(state.safetyLog ?? []), { uci: sf.uci, guess: guess?.uci ?? null, worst: sf.analysis.worst?.uci ?? null, ok }];
+  track('safety', { uci: sf.uci, guess: guess?.uci ?? null, ok });
+  render();
+}
+
+function leaveSafety(play) {
+  const sf = state.safety;
+  if (!play) {
+    state.safety = null;
+    return go(sf.from);
+  }
+  go('resolver');
+  playUserMove(sf.move);
 }
 
 // ------------------------------------------------------- modo sin tiempo
@@ -1168,7 +1291,7 @@ function comprobacion() {
       : h('p', { class: 'ok' }, 'No deja nada colgado a primera vista.'),
     dangers.length ? h('div', {}, h('p', {}, 'Antes de mover, peligros que ya había en la posición:'), findingsList(dangers)) : null,
     h('div', { class: 'actions' },
-      h('button', { class: 'primary', onClick: () => onBoardMove(ev.move) }, `Jugar ${ev.san}`),
+      h('button', { class: 'primary', 'data-key': 'p', onClick: () => onBoardMove(ev.move) }, `Jugar ${ev.san}`),
       h('button', { onClick: () => { state.intuition = null; go('intuicion'); } }, 'Cambiar de jugada'),
     ),
   );
@@ -1207,8 +1330,11 @@ function onBoardMove(move) {
       state.addingCandidate = false;
       return addCandidate(move);
     case 'comprobacion':
+      if (settings.safetyCheck) return startSafety(move, 'comprobacion');
       go('resolver');
       return playUserMove(move);
+    case 'permite':
+      return state.safety?.guess === undefined ? safetyGuess(move) : undefined;
     case 'resolver':
       return state.predict ? predictReply(move) : playUserMove(move);
     case 'remate':
@@ -1623,12 +1749,32 @@ async function startEngine() {
     log('engine', state.engine);
     render();
     await explainMistakes(run);
+    await rivalBestReply(run);
     evaluateShownPosition();
   } catch (err) {
     if (run !== engineRun) return;
     console.error(err);
     Object.assign(state.engine, { status: 'error', error: err.message });
   }
+  render();
+}
+
+/** Tras tu primera jugada: la mejor respuesta del rival según Stockfish (para «¿Qué permite?»). */
+async function rivalBestReply(run) {
+  const uci = state.firstPlayed;
+  if (!uci) return;
+  const chess = load(state.puzzle.fen);
+  try {
+    chess.move(uciToMove(uci));
+  } catch {
+    return;
+  }
+  if (chess.isGameOver()) return;
+  const r = await engine.evaluate(chess.fen(), { depth: 12 });
+  if (run !== engineRun) return;
+  const san = pvToSan(chess.fen(), r.pv, 3);
+  const feared = state.safetyLog?.findLast((x) => x.uci === uci)?.guess;
+  state.engine.rivalBest = { after: pvToSan(state.puzzle.fen, [uci], 1)[0], san, uci: r.pv[0], score: r.score, feared };
   render();
 }
 
@@ -1768,6 +1914,14 @@ function engineSection() {
   }
   const mistakes = mistakesView(ev);
   if (mistakes) box.append(mistakes);
+  if (ev.rivalBest?.san.length) {
+    const rb = ev.rivalBest;
+    // La puntuación es del rival: se da la vuelta para leerla desde tu lado.
+    const mine = rb.score.mate != null ? { mate: -rb.score.mate } : { cp: -rb.score.cp };
+    box.append(h('p', { class: 'small' }, h('strong', {}, `¿Qué permitía ${rb.after}? `),
+      `La mejor respuesta del rival según Stockfish: ${rb.san[0]} (${formatScore(mine)}, ${describeAdvantage(mine)})${rb.san.length > 1 ? `, ${rb.san.join(' ')}` : ''}.`,
+      rb.feared !== undefined ? (rb.feared === rb.uci ? ' Era la que temías: bien visto.' : ' No era la que temías.') : ''));
+  }
   if (ev.status === 'running') {
     const total = ev.origin.size;
     box.append(h('p', { class: 'muted small' }, `Analizando… ${ev.rows.length}/${total}${ev.source === 'stockfish' ? ` (profundidad ${DEFAULT_DEPTH})` : ''}`));
