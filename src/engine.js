@@ -118,23 +118,27 @@ export class StockfishEngine {
   }
 
   /** Evalúa `fen` (opcionalmente solo la jugada `move`). Las búsquedas se encolan. */
-  evaluate(fen, { depth = DEFAULT_DEPTH, move } = {}) {
+  evaluate(fen, { depth = DEFAULT_DEPTH, move, multipv = 1 } = {}) {
     const run = async () => {
       await this.init();
-      let last = null;
+      const lines = new Map();
       const done = this.#waitFor(
         (l) => l.startsWith('bestmove'),
         (l) => {
           const info = parseInfo(l);
-          if (info && info.multipv === 1) last = info;
+          if (info) lines.set(info.multipv, info);
         },
       );
+      this.#send(`setoption name MultiPV value ${multipv}`);
       this.#send(`position fen ${fen}`);
       this.#send(`go depth ${depth}${move ? ` searchmoves ${move}` : ''}`);
       const best = await done;
       const bestMove = best.split(' ')[1];
-      if (!last) return { score: { cp: 0 }, pv: bestMove && bestMove !== '(none)' ? [bestMove] : [], depth: 0 };
-      return { score: last.score, pv: last.pv, depth: last.depth };
+      const last = lines.get(1);
+      // Las mejores `multipv` líneas, ordenadas (solo las de la última profundidad completa).
+      const top = [...lines.values()].filter((x) => x.depth === last?.depth).sort((a, b) => a.multipv - b.multipv).map((x) => ({ score: x.score, pv: x.pv }));
+      if (!last) return { score: { cp: 0 }, pv: bestMove && bestMove !== '(none)' ? [bestMove] : [], depth: 0, top: [] };
+      return { score: last.score, pv: last.pv, depth: last.depth, top };
     };
     const result = this.queue.then(run, run);
     this.queue = result.catch(() => {});
@@ -179,7 +183,7 @@ export async function evaluateMoves(source, fen, moves, { engine, depth = DEFAUL
   const rows = [];
 
   if (source === 'stockfish') {
-    const best = { ...(await engine.evaluate(fen, { depth })), via: 'stockfish' };
+    const best = { ...(await engine.evaluate(fen, { depth, multipv: 3 })), via: 'stockfish' };
     onProgress?.({ best, rows });
     for (const uci of unique) {
       const r = await engine.evaluate(fen, { depth, move: uci });
@@ -194,8 +198,8 @@ export async function evaluateMoves(source, fen, moves, { engine, depth = DEFAUL
   const fromWhite = (s) => (hero === 'w' ? s : negate(s));
   const root = await fetchCloudEval(fen, { multiPv: 5 }, fetchImpl);
   const rootPvs = root ? root.pvs.map((p) => ({ ...p, score: fromWhite(p.score) })) : [];
-  let best = rootPvs[0] ? { score: rootPvs[0].score, pv: rootPvs[0].pv, depth: root.depth, via: 'cloud' } : null;
-  if (!best && engine) best = { ...(await engine.evaluate(fen, { depth })), via: 'stockfish' };
+  let best = rootPvs[0] ? { score: rootPvs[0].score, pv: rootPvs[0].pv, depth: root.depth, via: 'cloud', top: rootPvs.slice(0, 3) } : null;
+  if (!best && engine) best = { ...(await engine.evaluate(fen, { depth, multipv: 3 })), via: 'stockfish' };
   onProgress?.({ best, rows });
   for (const uci of unique) {
     const known = rootPvs.find((p) => p.pv[0] === uci);
@@ -240,4 +244,33 @@ export async function evaluatePosition(source, fen, { engine, depth = DEFAULT_DE
   }
   if (!engine) return null;
   return { ...(await engine.evaluate(fen, { depth })), via: 'stockfish', toMove };
+}
+
+/** Probabilidad de ganar (0-1) para el bando de `score`, con la fórmula que usa Lichess. */
+export function winChance(score) {
+  if (!score) return 0.5;
+  if (score.mate != null) return score.mate > 0 ? 1 : 0;
+  const cp = Math.max(-1000, Math.min(1000, score.cp));
+  return 1 / (1 + Math.exp(-0.00368208 * cp));
+}
+
+/** La evaluación en palabras, desde el punto de vista de quien resuelve. */
+export function describeAdvantage(score) {
+  if (!score) return '';
+  if (score.mate != null) {
+    if (score.mate === 0) return 'mate';
+    return score.mate > 0 ? `das mate en ${score.mate}` : `recibes mate en ${-score.mate}`;
+  }
+  const a = Math.abs(score.cp);
+  const who = score.cp > 0 ? 'para ti' : 'para el rival';
+  if (a < 50) return 'posición igualada';
+  if (a < 150) return `ligera ventaja ${who}`;
+  if (a < 300) return `ventaja clara ${who}`;
+  return `ventaja decisiva ${who}`;
+}
+
+/** La mejor jugada (UCI) para jugar contra el motor, con una búsqueda corta. */
+export async function engineMove(engine, fen, { depth = 12 } = {}) {
+  const r = await engine.evaluate(fen, { depth });
+  return r.pv[0] ?? null;
 }

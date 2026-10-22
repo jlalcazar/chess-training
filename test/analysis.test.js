@@ -99,3 +99,37 @@ test('las preguntas de cambios son abiertas y proponen cambios concretos', async
   const r = answerQuestion('cambiosFinal', '3r2k1/5ppp/8/8/8/8/5PPP/3R2K1 w - - 0 1', 'w');
   assert.ok(r.findings.some((f) => f.text.includes('Cambio disponible: Rxd8')), JSON.stringify(r.findings));
 });
+
+const FORK_FEN = '5r1k/ppp2q2/7p/4P1p1/1P1P4/2P3RP/P2Q2K1/8 b - - 3 36';
+const MATE4_FEN = 'r1b2r2/1p1n1ppk/4p3/b2pB3/p2P4/q1P1R3/P2Q1PPP/R5K1 w - - 0 19';
+
+test('barrido: cuenta jaques, capturas y amenazas', async () => {
+  const { forcingSweep } = await import('../src/analysis.js');
+  const s = forcingSweep(FORK_FEN);
+  assert.deepEqual(s.checks.map((m) => m.san).sort(), ['Qd5+', 'Qf1+', 'Qf2+', 'Qf3+']);
+  assert.deepEqual(s.captures.map((m) => m.san), ['Qxa2']);
+  assert.ok(s.threats.every((m) => !m.captured && !m.san.includes('+')));
+});
+
+test('puntos ciegos: sacrificio, hacia atrás, largo y pieza olvidada', async () => {
+  const { blindSpots } = await import('../src/analysis.js');
+  // Rh8+ en el mate en 4: la torre se entrega en h8.
+  const afterRh3 = 'r1b2rk1/1p1n1pp1/4p3/b2pB3/p2P4/q1P4R/P2Q1PPP/R5K1 w - - 2 20';
+  assert.ok(blindSpots(afterRh3, 'h3h8').includes('sacrificio'));
+  assert.ok(blindSpots(FORK_FEN, 'f7f1').includes('largo'));
+  assert.deepEqual(blindSpots('4k3/8/8/8/8/8/3B4/4K3 w - - 0 1', 'd2c1'), ['atras', 'tranquila']);
+  assert.ok(blindSpots(MATE4_FEN, 'e3h3', ['d2d3']).includes('piezaOlvidada'));
+});
+
+test('explainLine reconoce los temas de la solución (como el etiquetador de Lichess)', async () => {
+  const { explainLine, narratePly } = await import('../src/analysis.js');
+  const mate = explainLine(MATE4_FEN, ['e3h3', 'h7g8', 'h3h8', 'g8h8', 'd2h6', 'h8g8', 'h6g7']);
+  const themes = Object.fromEntries(mate.filter((p) => p.by === 'you').map((p) => [p.san, p.themes]));
+  assert.ok(themes['Rh8+'].includes('sacrificio') && themes['Rh8+'].includes('atraccion'));
+  assert.ok(themes['Qxg7#'].includes('mate'));
+  assert.ok(!themes['Qh6+'].includes('sacrificio'));
+  assert.equal(mate[3].forced, true);
+  assert.match(narratePly(mate[3]), /no tiene otra jugada/);
+  const fork = explainLine(FORK_FEN, ['f7f1', 'g2h2', 'f8f2', 'd2f2', 'f1f2']);
+  assert.ok(fork[2].themes.includes('ataqueDoble'));
+});

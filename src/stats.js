@@ -1,4 +1,5 @@
 // Estadísticas por pregunta del método: qué preguntas te cuestan más.
+import { BLIND_SPOTS } from './analysis.js';
 import { ENDGAME_QUESTIONS, STRATEGIC_QUESTIONS, TACTICAL_QUESTIONS } from './method.js';
 
 export const STATS_VERSION = 1;
@@ -10,7 +11,7 @@ export const ALL_QUESTIONS = [
   ...Object.entries(ENDGAME_QUESTIONS).map(([id, q]) => ({ id, ...q, group: 'Finales' })),
 ];
 
-export const emptyStats = () => ({ version: STATS_VERSION, exercises: 0, questions: {}, candidates: { asked: 0, keyFound: 0 } });
+export const emptyStats = () => ({ version: STATS_VERSION, exercises: 0, questions: {}, candidates: { asked: 0, keyFound: 0 }, blindSpots: {}, hints: { exercises: 0, used: 0, needed: 0 } });
 
 const emptyQuestion = () => ({ asked: 0, correct: 0, missed: 0, falseAlarm: 0, unsure: 0, withIdea: 0, key: 0, keyMissed: 0 });
 
@@ -20,10 +21,15 @@ const emptyQuestion = () => ({ asked: 0, correct: 0, missed: 0, falseAlarm: 0, u
  * @param notes    { [id]: string } ideas escritas en las preguntas abiertas
  * @param keyQuestions ids de preguntas a las que responde SÍ la jugada clave
  * @param keyInCandidates true/false si se usó la técnica de candidatas, null si no
+ * @param blind     tipos de "punto ciego" de la jugada clave (ver BLIND_SPOTS)
+ * @param hintsUsed pistas pedidas en el ejercicio
  */
-export function recordExercise(stats, { answers = {}, notes = {}, keyQuestions = [], keyInCandidates = null }) {
-  const next = structuredClone(stats ?? emptyStats());
-  next.exercises++;
+export function recordExercise(stats, { answers = {}, notes = {}, keyQuestions = [], keyInCandidates = null, blind = [], hintsUsed = 0 }) {
+  const next = { ...emptyStats(), ...structuredClone(stats ?? emptyStats()) };
+  next.blindSpots ??= {};
+  next.hints ??= { exercises: 0, used: 0, needed: 0 };
+  // Solo cuentan los ejercicios con preguntas (el modo "sin tiempo" no las tiene).
+  if (Object.values(answers).some(Boolean)) next.exercises++;
   const keys = new Set(keyQuestions);
   for (const [id, answer] of Object.entries(answers)) {
     if (!answer) continue;
@@ -41,8 +47,8 @@ export function recordExercise(stats, { answers = {}, notes = {}, keyQuestions =
     } else {
       q.falseAlarm++;
     }
-    // La pregunta señalaba la jugada clave: ¿la viste?
-    if (keys.has(id)) {
+    // La pregunta señalaba la jugada clave (y de verdad había algo): ¿la viste?
+    if (keys.has(id) && answer.result.yes) {
       q.key++;
       if (!open && answer.user !== true) q.keyMissed++;
     }
@@ -50,7 +56,16 @@ export function recordExercise(stats, { answers = {}, notes = {}, keyQuestions =
   if (keyInCandidates !== null) {
     next.candidates.asked++;
     if (keyInCandidates) next.candidates.keyFound++;
+    // Puntos ciegos: qué tipo de jugada clave se te escapa de las candidatas.
+    for (const kind of blind) {
+      const b = (next.blindSpots[kind] ??= { seen: 0, missed: 0 });
+      b.seen++;
+      if (!keyInCandidates) b.missed++;
+    }
   }
+  next.hints.exercises++;
+  next.hints.used += hintsUsed;
+  if (hintsUsed) next.hints.needed++;
   return next;
 }
 
@@ -75,7 +90,11 @@ export function summarize(stats, { minAnswers = 3 } = {}) {
   });
   rows.sort((a, b) => score(b) - score(a));
   const hardest = rows.filter((r) => !r.open && r.enough && (r.difficulty > 0 || r.keyMissed > 0))[0] ?? null;
-  return { rows, hardest, exercises: stats?.exercises ?? 0, candidates: stats?.candidates ?? { asked: 0, keyFound: 0 } };
+  const blindSpots = Object.entries(stats?.blindSpots ?? {})
+    .filter(([kind]) => BLIND_SPOTS[kind])
+    .map(([kind, b]) => ({ kind, text: BLIND_SPOTS[kind], ...b, rate: b.seen ? b.missed / b.seen : 0 }))
+    .sort((a, b) => b.rate - a.rate || b.missed - a.missed);
+  return { rows, hardest, exercises: stats?.exercises ?? 0, candidates: stats?.candidates ?? { asked: 0, keyFound: 0 }, blindSpots, hints: stats?.hints ?? { exercises: 0, used: 0, needed: 0 } };
 }
 
 // Ordena por lo que más importa: no ver la pregunta que llevaba a la solución.

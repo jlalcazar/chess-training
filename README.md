@@ -49,14 +49,37 @@ Parámetros de URL útiles para depurar:
    - **Stockfish 19 WASM** (por defecto): versión *lite* de un hilo, corre en tu navegador sin servidor ni cabeceras especiales.
    - **Nube de análisis de Lichess** (`/api/cloud-eval`): instantánea, pero solo tiene las posiciones que alguien ya analizó; lo que falta se completa con Stockfish.
 
-   Con el motor activo, la navegación muestra también la evaluación de la posición del tablero.
+   Con el motor activo:
+   - la navegación muestra una **barra de ventaja** (con la evaluación en palabras: "ventaja clara
+     para ti", "recibes mate en 2"…) y una flecha con la mejor jugada de la posición del tablero;
+   - **"Por qué fallaron tus jugadas"**: para cada jugada errónea, Stockfish muestra la refutación
+     del rival y lo que era mejor.
 
 **Estadísticas por pregunta** (botón "Estadísticas"): al terminar cada ejercicio se guarda, en
 tu navegador, cómo respondiste a cada pregunta: aciertos, "no lo viste" (había algo y dijiste que
 no), falsas alarmas, "no lo sé" y, sobre todo, cuántas veces la pregunta llevaba a la jugada clave
 y no la viste. Con eso señala la pregunta que más te cuesta (a partir de 3 respuestas) y el
-porcentaje de ejercicios en que la clave estaba entre tus candidatas. Las preguntas abiertas no
-se puntúan: solo cuentan cuántas veces las pensaste y escribiste tu idea.
+porcentaje de ejercicios en que la clave estaba entre tus candidatas. Una pregunta solo cuenta
+como "llevaba a la clave" si el análisis respondía SÍ en esa posición. Las preguntas abiertas no
+se puntúan: solo cuentan cuántas veces las pensaste y escribiste tu idea. Solo registran los
+ejercicios del modo "con tiempo" (el modo "sin tiempo" no hace preguntas).
+
+**Ayudas para no pasar por alto la jugada y entender la solución:**
+
+- **Barrido** antes de cerrar las candidatas: cuántos jaques, capturas y amenazas hay (sin decir
+  cuáles) y si tus candidatas incluyen alguno de cada tipo; también los del rival.
+- **Pistas graduadas** mientras juegas: qué pregunta responde SÍ → qué pieza mueve → casilla destino.
+- **Puntos ciegos**: si la clave no estaba entre tus candidatas, por qué pudo costarte verla
+  (sacrificio, jugada hacia atrás, tranquila, movimiento largo, caballo, pieza olvidada), con
+  estadísticas acumuladas.
+- **La línea ganadora jugada a jugada**, con los temas detectados en cada jugada (sacrificio,
+  atracción, desviación, ataque doble, clavada…; reglas inspiradas en el etiquetador de
+  [lichess-puzzler](https://github.com/ornicar/lichess-puzzler)) y un botón para reproducirla
+  explicada en el tablero.
+- **Temas de Lichess explicados**, señalando la jugada del ejercicio donde aparece cada uno.
+- Con Stockfish: **las 3 mejores jugadas** (MultiPV) frente a tus candidatas, **defensas
+  alternativas del rival** en cada jugada suya, y **rematar contra Stockfish** desde la posición
+  final para demostrar que sabes convertir la ventaja.
 
 **Modo "sin tiempo"**: intuición (cuenta atrás de 20 s), comprobación de que no te dejas nada, jugar.
 
@@ -75,7 +98,12 @@ se puntúan: solo cuentan cuántas veces las pensaste y escribiste tu idea.
 
 ## Próximas iteraciones
 
-- Estadísticas por pregunta para saber qué te cuesta más.
+Ideas sacadas de proyectos de código abierto (ver la conversación del 20/10/2026):
+
+- Repetición espaciada de los ejercicios fallados (como Listudy o Better Tactics).
+- Panel de puntos fuertes y débiles por tema de Lichess (como el *dashboard* de lila).
+- Gráfica de evaluación de la línea y clasificación tipo "brillante/excelente" (Chesskit, freechess).
+- Tablero chessground (el de Lichess) con flechas dibujables por el usuario y animaciones.
 
 ## Créditos
 
