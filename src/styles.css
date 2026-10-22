@@ -400,3 +400,12 @@ table.decision tbody tr { cursor: pointer; }
 .last-fail { border-left: 4px solid var(--info); background: color-mix(in srgb, var(--info) 8%, transparent); padding: 6px 12px; margin: 0 0 10px; font-size: 0.9rem; border-radius: 2px; }
 .board-mode { flex-wrap: wrap; }
 @media (max-width: 860px), (hover: none) { .mode-draw { display: none; } }
+.eval-graph { margin: 12px 0; }
+.eval-graph svg.graph { display: block; width: 100%; height: 120px; border: 1px solid var(--border); border-radius: 4px; background: #333; cursor: pointer; margin-top: 4px; }
+.graph-area { fill: #f0f0f0; }
+.graph-line { fill: none; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.graph-mid { stroke: #888; stroke-dasharray: 4 4; vector-effect: non-scaling-stroke; }
+.graph-cursor { stroke: var(--info); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.graph-solution { fill: rgb(58 110 165 / 0.25); }
+.move-classes ul { list-style: none; padding: 0; margin: 4px 0; }
+.move-classes li { margin: 4px 0; }

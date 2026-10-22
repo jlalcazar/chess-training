@@ -9,6 +9,7 @@ import { CONFIDENCE, GLANCE_CASES, GLANCE_SECONDS, glanceCase } from './intuitio
 import { PHASE_NAMES, fixation, keyFirstSeen, phaseDurations } from './timeline.js';
 import { ERROR_INFO, classifyMistake, errorAdvice } from './errors.js';
 import { PROMOTION, STAGES, ladder, planQuestions, updateScaffold } from './scaffold.js';
+import { classifyMove, graphPaths } from './evalgraph.js';
 import { EVAL_SYMBOLS, blindQuestions, cpToSymbol, firstDeviation, gradeBlind, playLine, rivalNode, symbolOf } from './blindline.js';
 import { SRS_INTERVALS, startOfDay, dueReviews, dueText, emptyProgress, failCount, learnedPuzzles, legacyCount, recordAttempt, srsChange, themeSummary, upcomingReviews } from './progress.js';
 import { DIFFICULTIES, THEMES, THEME_HELP, fetchDailyPuzzle, fetchNextPuzzle, fetchPuzzleById, themeName } from './lichess.js';
@@ -461,6 +462,7 @@ function navigate(index, { keepExplaining = false } = {}) {
   state.engineFocus = null;
   board.setArrows([]);
   syncBoard();
+  refreshGraph();
   if (settings.engineOn) {
     evaluateShownPosition();
     findAlternatives();
@@ -1660,6 +1662,7 @@ function revealSolution() {
   if (state.revealed) return;
   state.revealed = true;
   state.predict = null;
+  state.playedPlies = state.ply;
   saveProgress(false);
   render();
   const chess = load(state.playFen);
@@ -2344,6 +2347,7 @@ async function startEngine() {
     await explainMistakes(run);
     await rivalBestReply(run);
     await evaluateCalcLines(run);
+    await evaluateGame(run);
     evaluateShownPosition();
   } catch (err) {
     if (run !== engineRun) return;
@@ -2370,6 +2374,99 @@ async function rivalBestReply(run) {
   const feared = state.safetyLog?.findLast((x) => x.uci === uci)?.guess;
   state.engine.rivalBest = { after: pvToSan(state.puzzle.fen, [uci], 1)[0], san, uci: r.pv[0], score: r.score, feared };
   render();
+}
+
+/** Evalúa todas las posiciones (la solución primero, luego la partida) para la gráfica. */
+async function evaluateGame(run) {
+  const review = state.review;
+  const order = [...review.positions.keys()].sort((a, b) => (a >= review.puzzleIndex ? 0 : 1) - (b >= review.puzzleIndex ? 0 : 1) || (a >= review.puzzleIndex ? a - b : b - a));
+  let pending = 0;
+  for (const i of order) {
+    const { fen } = review.positions[i];
+    if (review.evals.has(fen)) continue;
+    let ev;
+    try {
+      ev = await evaluatePosition('stockfish', fen, { engine, depth: 10 });
+    } catch {
+      ev = null;
+    }
+    if (run !== engineRun || state.review !== review) return;
+    review.evals.set(fen, ev);
+    if (++pending % 6 === 0) refreshGraph();
+  }
+  refreshGraph();
+}
+
+/** Probabilidad de ganar (desde tu lado) de una posición de la partida, o null si aún no está evaluada. */
+function heroWin(fen) {
+  const chess = load(fen);
+  if (chess.isCheckmate()) return chess.turn() === state.puzzle.heroColor ? 0 : 1;
+  if (chess.isGameOver()) return 0.5;
+  const ev = state.review.evals.get(fen);
+  return ev ? winChance(heroScore(ev)) : null;
+}
+
+/** Solo redibuja la gráfica y la clasificación (sin reconstruir todo el panel). */
+function refreshGraph() {
+  const old = document.getElementById('eval-graph');
+  if (old && state?.review) old.replaceWith(evalGraphView());
+}
+
+/** Gráfica de la partida y de la línea (tu probabilidad de ganar) y la clasificación de tus jugadas. */
+function evalGraphView() {
+  const review = state.review;
+  const values = review.positions.map((p) => heroWin(p.fen));
+  const known = values.filter((v) => v != null).length;
+  const W = 600;
+  const H = 120;
+  const { line, area, x } = graphPaths(values, { width: W, height: H });
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.classList.add('graph');
+  const add = (tag, attrs) => {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+    svg.append(el);
+    return el;
+  };
+  add('path', { d: area, class: 'graph-area' });
+  add('rect', { x: x(review.puzzleIndex), y: 0, width: Math.max(1, W - x(review.puzzleIndex)), height: H, class: 'graph-solution' });
+  add('line', { x1: 0, y1: H / 2, x2: W, y2: H / 2, class: 'graph-mid' });
+  add('path', { d: line, class: 'graph-line' });
+  add('line', { x1: x(review.index), y1: 0, x2: x(review.index), y2: H, class: 'graph-cursor' });
+  svg.addEventListener('click', (ev) => {
+    const r = svg.getBoundingClientRect();
+    navigate(Math.round(((ev.clientX - r.left) / r.width) * (review.positions.length - 1)));
+  });
+  return h('div', { id: 'eval-graph', class: 'eval-graph' },
+    h('strong', {}, 'Tu probabilidad de ganar a lo largo de la partida'),
+    svg,
+    h('p', { class: 'muted small' }, known < values.length ? `Evaluando posiciones… ${known}/${values.length}` : 'La zona sombreada es la solución. Pulsa en la gráfica para ir a esa posición.'),
+    movesClassView(values),
+  );
+}
+
+/** Clasificación de cada jugada tuya: las de la línea que jugaste y tus fallos. */
+function movesClassView(values) {
+  const review = state.review;
+  const played = state.playedPlies ?? state.puzzle.solution.length;
+  const rows = [];
+  for (let k = 0; k < played; k += 2) {
+    const i = review.puzzleIndex + k;
+    const before = values[i];
+    const after = values[i + 1];
+    if (before == null || after == null) continue;
+    const ply = review.explanations.get(i + 1);
+    const c = classifyMove(before, after, { sacrifice: ply?.themes.includes('sacrificio') });
+    rows.push(h('li', {}, h('span', { class: `badge tone-${c.tone}` }, `${c.label}${c.symbol ? ` ${c.symbol}` : ''}`), ' ', h('strong', {}, ply?.san ?? ''), h('span', { class: 'muted small' }, ` · pierde ${c.loss} puntos de probabilidad`)));
+  }
+  for (const m of state.engine?.mistakes ?? []) {
+    const c = classifyMove(winChance(m.best.score), winChance(m.played.score));
+    rows.push(h('li', {}, h('span', { class: `badge tone-${c.tone}` }, `${c.label}${c.symbol ? ` ${c.symbol}` : ''}`), ' ', h('strong', {}, m.san), h('span', { class: 'muted small' }, ` (tu fallo) · pierde ${c.loss} puntos de probabilidad`)));
+  }
+  if (!rows.length) return null;
+  return h('div', { class: 'move-classes' }, h('strong', {}, 'Tus jugadas'), h('ul', {}, rows));
 }
 
 /** Paso Calcular: Stockfish valora la posición final de cada línea («Valoraste = y era ±»). */
@@ -2529,6 +2626,7 @@ function engineSection() {
   }
   const mistakes = mistakesView(ev);
   if (mistakes) box.append(mistakes);
+  if (ev.status === 'done') box.append(evalGraphView());
   if (ev.calcEvals && state.calc?.chosen) {
     box.append(h('div', { class: 'small' }, h('strong', {}, 'Tus líneas del paso Calcular'), h('ul', {}, state.calc.order.filter((u) => ev.calcEvals[u]).map((u) => {
       const entry = state.calc.lines[u];
