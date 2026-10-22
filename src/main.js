@@ -10,6 +10,7 @@ import { PHASE_NAMES, fixation, keyFirstSeen, phaseDurations } from './timeline.
 import { ERROR_INFO, classifyMistake, errorAdvice } from './errors.js';
 import { PROMOTION, STAGES, ladder, planQuestions, updateScaffold } from './scaffold.js';
 import { classifyMove, graphPaths } from './evalgraph.js';
+import { isQuietPosition, quietCandidates, quietReason, recordMixed } from './mixed.js';
 import { BURST_SECONDS, PACES, WOODPECKER_SIZE, addPuzzle, balancePositions, burstSummary, cycleMode, cycleNumber, gamePositions, newWoodpecker, nextInCycle, nextPace, recordBurst, recordWoodpecker, rng, shuffle, startNextCycle, woodpeckerStatus } from './drills.js';
 import { EVAL_SYMBOLS, blindQuestions, cpToSymbol, firstDeviation, gradeBlind, playLine, rivalNode, symbolOf } from './blindline.js';
 import { SRS_INTERVALS, startOfDay, dueReviews, dueText, emptyProgress, failCount, learnedPuzzles, legacyCount, recordAttempt, srsChange, themeSummary, upcomingReviews } from './progress.js';
@@ -68,14 +69,15 @@ function stopTimer() {
   timer = null;
 }
 
-function newState(puzzle, modeOverride = null) {
+function newState(puzzle, modeOverride = null, mixed = null) {
   const plan = questionPlan(puzzle.fen, settings.level);
-  const exerciseMode = modeOverride ?? (settings.mode === 'mixto' ? 'tiempo' : settings.mode);
+  const exerciseMode = modeOverride ?? (mixed ? 'mixto' : settings.mode === 'mixto' ? 'tiempo' : settings.mode);
   return {
     puzzle,
     plan,
+    mixed,
     mode: exerciseMode,
-    flow: flowFor(exerciseMode, puzzle),
+    flow: mixed ? ['declarar', mixed.kind === 'quiet' ? 'mover' : 'resolver', 'resumen'] : flowFor(exerciseMode, puzzle),
     step: null,
     candidates: [],
     addingCandidate: false, // en Decisión: el próximo movimiento en el tablero se apunta, no se juega
@@ -115,7 +117,7 @@ function flowFor(mode, puzzle) {
   ].filter(Boolean);
 }
 
-const STEP_LABELS = { calma: 'Calma', cambios: '¿Qué cambió?', vistazo: 'Golpe de vista', candidatas: 'Candidatas', tactica: 'Táctica', estrategia: 'Estrategia', calculo: 'Calcular', decision: 'Decisión', permite: '¿Qué permite?', resolver: 'Jugar', resumen: 'Resumen', intuicion: 'Intuición', comprobacion: 'Comprobar' };
+const STEP_LABELS = { declarar: '¿Táctica o mejora?', mover: 'Jugar', calma: 'Calma', cambios: '¿Qué cambió?', vistazo: 'Golpe de vista', candidatas: 'Candidatas', tactica: 'Táctica', estrategia: 'Estrategia', calculo: 'Calcular', decision: 'Decisión', permite: '¿Qué permite?', resolver: 'Jugar', resumen: 'Resumen', intuicion: 'Intuición', comprobacion: 'Comprobar' };
 
 /** El paso que sigue a `step` en el flujo de este ejercicio. */
 function nextStep(step) {
@@ -227,7 +229,22 @@ async function loadPuzzle(source, { srs = false, woodpecker = false, modeOverrid
             : await fetchNextPuzzle({ angle: settings.angle, difficulty: settings.difficulty });
     if (request !== loadSeq) return;
     log('puzzle', puzzle);
-    state = newState(puzzle, modeOverride);
+    // Modo «¿táctica o mejora?»: la mitad de las veces, una posición tranquila de la misma partida.
+    let exercise = puzzle;
+    let mixed = null;
+    if (settings.mode === 'mixto' && !srs && !woodpecker && !modeOverride) {
+      mixed = { kind: 'tactic', declared: null };
+      if (Math.random() < 0.5) {
+        panel.replaceChildren(h('p', { class: 'muted' }, 'Buscando una posición de la partida…'));
+        const quiet = await findQuietPosition(puzzle);
+        if (request !== loadSeq) return;
+        if (quiet) {
+          exercise = quiet;
+          mixed.kind = 'quiet';
+        }
+      }
+    }
+    state = newState(exercise, modeOverride, mixed);
     state.woodpecker = woodpecker;
     state.step = state.flow[0];
     savePool(puzzle);
@@ -292,7 +309,7 @@ function render() {
   const idx = steps.findIndex(([id]) => id === shown);
   const stepper = h('ol', { class: 'stepper' }, steps.map(([id, label], i) => h('li', { class: i < idx ? 'done' : i === idx ? 'current' : '' }, label)));
 
-  const views = { calma, cambios, vistazo, candidatas, tactica, estrategia, calculo, decision, permite, resolver, resumen, intuicion, comprobacion, remate };
+  const views = { declarar, mover, calma, cambios, vistazo, candidatas, tactica, estrategia, calculo, decision, permite, resolver, resumen, intuicion, comprobacion, remate };
   const reminder = state.step !== 'resumen' && state.step !== 'remate' ? state.lastFail ??= lastFailNote() ?? false : null;
   panel.replaceChildren(...[header, state.woodpecker ? woodpeckerLine() : null, stepper, reminder || null, views[state.step]()].filter(Boolean));
   if (DEBUG) panel.append(h('details', { class: 'debug' }, h('summary', {}, 'Depuración'), h('pre', {}, JSON.stringify({ ...state, plan: undefined }, null, 2))));
@@ -358,7 +375,7 @@ function syncBoard() {
   }
   if (step === 'permite') board.setPosition(state.safety.fenAfter, { orientation: state.puzzle.heroColor, lastMove: state.safety.lastMove });
   else if (step !== 'resumen') board.setPosition(state.playFen, { orientation: state.puzzle.heroColor, lastMove: state.lastMove });
-  board.setInteractive((['candidatas', 'intuicion', 'decision', 'resolver'].includes(step) || (step === 'vistazo' && !state.glance) || (step === 'permite' && state.safety?.guess === undefined)) && !(step === 'resolver' && (state.revealed || state.ply >= state.puzzle.solution.length)));
+  board.setInteractive((['candidatas', 'intuicion', 'decision', 'resolver'].includes(step) || (step === 'mover' && !state.quietMove) || (step === 'vistazo' && !state.glance) || (step === 'permite' && state.safety?.guess === undefined)) && !(step === 'resolver' && (state.revealed || state.ply >= state.puzzle.solution.length)));
   board.setPickMode(Boolean(state.pointing));
   if (step === 'candidatas' || step === 'decision') {
     board.setArrows(state.candidates.map((c, i) => ({ from: c.move.from, to: c.move.to, tone: step === 'decision' && state.selectedCandidate === i ? 'good' : 'candidate' })));
@@ -408,6 +425,8 @@ function clickMode() {
       return { kind: 'move', text: 'Clic: jugar' };
     case 'remate':
       return { kind: 'move', text: 'Clic: jugar contra Stockfish' };
+    case 'mover':
+      return state.quietMove ? { kind: 'none', text: 'El tablero está quieto' } : { kind: 'move', text: 'Clic: jugar' };
     case 'resumen':
       return { kind: 'none', text: 'Navega con los botones o las flechas del teclado' };
     default:
@@ -1566,6 +1585,8 @@ function onBoardMove(move) {
       return state.predict ? predictReply(move) : playUserMove(move);
     case 'remate':
       return finaleMove(move);
+    case 'mover':
+      return playQuietMove(move);
     default:
       return undefined;
   }
@@ -1708,6 +1729,7 @@ function revealSolution() {
 function resolver() {
   const { feedback } = state;
   const children = [h('h2', {}, `${stepNo('resolver')}. ${mode() === 'tiempo' ? 'Juega tu decisión' : 'Juega'}`)];
+  if (state.mixed && state.mixed.declared === 'quiet' && !state.feedback && state.ply === 0) children.push(h('p', { class: 'small muted' }, 'Has dicho «toca mejorar»: juega tu mejor jugada.'));
   if (state.predict) {
     children.push(
       feedback?.type === 'ok' ? h('p', { class: 'ok' }, `✔ ${feedback.san} es correcta.`) : null,
@@ -2153,6 +2175,7 @@ function finish(solved) {
     predictions: { ok: state.predictions.filter((p) => p.ok).length, total: state.predictions.length },
   }));
   if (settings.scaffold && mode() === 'tiempo') updateLadder(key, keyUci);
+  if (state.mixed) recordMixedStat({ kind: 'tactic', declared: state.mixed.declared });
   saveProgress(state.success);
   if (state.woodpecker) {
     const wp = storage.get('woodpecker', null);
@@ -2274,6 +2297,7 @@ function progressNote() {
 }
 
 function resumen() {
+  if (state.mixed?.kind === 'quiet') return resumenQuiet();
   const { puzzle } = state;
   const key = evaluateMove(puzzle.fen, uciToMove(puzzle.solution[0]));
   const solutionInCandidates = state.candidates.some((c) => c.uci === key.uci) || state.intuition?.uci === key.uci;
@@ -2293,6 +2317,7 @@ function resumen() {
     h('p', {}, h('strong', {}, `Clave ${key.san}: `), key.tags.length ? key.tags.map((t) => t.text).join('; ') : 'jugada tranquila: no da jaque ni captura; aquí cuentan las preguntas estratégicas.'),
     lineView(),
     themesView(),
+    state.mixed ? h('p', { class: state.mixed.declared === 'tactic' ? 'ok' : 'ko' }, state.mixed.declared === 'tactic' ? 'Dijiste «táctica» y la había: bien visto.' : 'Dijiste «toca mejorar», pero había táctica: no la viste.') : null,
     glanceCard(),
     processPanel(),
     ladderNote(),
@@ -2941,8 +2966,17 @@ function burstStats(raw) {
 }
 
 /** Modo «¿hay táctica o toca mejorar?». */
-function mixedStats() {
-  return null;
+function mixedStats(raw) {
+  const m = raw.mixed;
+  if (!m || !(m.tactic.n + m.quiet.n)) return null;
+  return h('div', { class: 'stats-block' },
+    h('h3', {}, '¿Hay táctica o toca mejorar?'),
+    h('ul', { class: 'blind-stats' },
+      h('li', {}, `Con táctica: la viste en ${m.tactic.said} de ${m.tactic.n}`, m.missed ? h('span', { class: 'ko' }, ` · ${m.missed} ${m.missed === 1 ? 'táctica no vista' : 'tácticas no vistas'}`) : null),
+      h('li', {}, `Tranquilas: lo reconociste en ${m.quiet.said} de ${m.quiet.n}`, m.invented ? h('span', { class: 'ko' }, ` · ${m.invented} ${m.invented === 1 ? 'combinación inventada' : 'combinaciones inventadas'}`) : null),
+      m.quietMoves.n ? h('li', {}, `Tus jugadas en posiciones tranquilas: ${m.quietMoves.good} de ${m.quietMoves.n} buenas (a menos de medio peón de la mejor).`) : null,
+    ),
+  );
 }
 
 /** «Tu intuición»: acierto por nivel de seguridad y puntuación de Brier. */
@@ -3182,6 +3216,120 @@ function openReview() {
     learned.length
       ? h('details', {}, h('summary', {}, `Aprendidos (${learned.length})`), h('ul', { class: 'review-list' }, learned.map((r) => puzzleItem(r))))
       : null,
+  );
+}
+
+// ------------------------------------- modo «¿hay táctica o toca mejorar?»
+
+/** Busca una posición tranquila en la partida del puzzle, comprobada con Stockfish. */
+async function findQuietPosition(puzzle) {
+  const candidates = shuffle(quietCandidates(puzzle));
+  for (const c of candidates) {
+    let top = null;
+    try {
+      engine ??= new StockfishEngine();
+      top = (await engine.evaluate(c.fen, { depth: 12, multipv: 2 })).top;
+    } catch (err) {
+      console.error(err);
+      return null;
+    }
+    log('tranquila?', c.plies, JSON.stringify(top?.[0]?.score), top?.[0]?.pv[0], quietReason(c.fen, top));
+    if (!isQuietPosition(c.fen, top)) continue;
+    return {
+      id: `${puzzle.id}~${c.plies}`,
+      rating: puzzle.rating,
+      themes: [],
+      solution: [top[0].pv[0]],
+      fen: c.fen,
+      fenBefore: c.fenBefore,
+      lastMove: c.lastMove,
+      heroColor: c.heroColor,
+      gameMoves: c.gameMoves,
+      puzzleUrl: puzzle.gameUrl,
+      gameUrl: puzzle.gameUrl,
+      quiet: { top, source: puzzle.id },
+    };
+  }
+  return null;
+}
+
+function declarar() {
+  const pick = (declared) => {
+    state.mixed.declared = declared;
+    track('declare', { declared });
+    go(nextStep('declarar'));
+  };
+  return h('section', {},
+    h('h2', {}, `${stepNo('declarar')}. ¿Hay táctica o toca mejorar?`),
+    h('p', {}, 'En un puzzle sabes que hay táctica. Aquí no: unas veces es un ejercicio de Lichess y otras una posición tranquila de la misma partida, antes del error. Míralo como en una partida y decide.'),
+    h('div', { class: 'actions' },
+      h('button', { 'data-key': '1', onClick: () => pick('tactic') }, 'Hay táctica (1)'),
+      h('button', { 'data-key': '2', onClick: () => pick('quiet') }, 'Toca mejorar (2)')),
+    h('p', { class: 'muted small' }, 'Después juegas tu jugada y el motor la corrige.'),
+  );
+}
+
+function mover() {
+  const q = state.quietMove;
+  return h('section', {},
+    h('h2', {}, `${stepNo('mover')}. Juega tu mejor jugada`),
+    q ? h('p', { class: 'muted' }, `Jugaste ${q.san}. Stockfish la está evaluando…`) : h('p', {}, state.mixed.declared === 'tactic' ? 'Has dicho «hay táctica»: juega tu combinación (su primera jugada).' : 'Has dicho «toca mejorar»: juega la jugada que mejora tu posición.'),
+  );
+}
+
+/** Jugada en una posición tranquila: Stockfish la corrige con evaluateMoves y verdict. */
+async function playQuietMove(move) {
+  if (state.quietMove) return;
+  const chess = load(state.puzzle.fen);
+  let m;
+  try {
+    m = chess.move({ ...move, promotion: move.promotion ?? 'q' });
+  } catch {
+    return;
+  }
+  const uci = uciOf(m);
+  state.quietMove = { uci, san: m.san, lastMove: { from: m.from, to: m.to } };
+  track('move', { uci, ply: 0 });
+  render();
+  const current = state;
+  let result = null;
+  try {
+    engine ??= new StockfishEngine();
+    result = await evaluateMoves('stockfish', state.puzzle.fen, [uci], { engine, depth: 12 });
+  } catch (err) {
+    console.error(err);
+  }
+  if (state !== current) return;
+  const best = result?.best ?? { score: state.puzzle.quiet.top[0].score, pv: state.puzzle.quiet.top[0].pv };
+  const row = result?.rows[0];
+  const loss = row ? Math.max(0, toCp(best.score) - toCp(row.score)) : null;
+  state.quietMove.best = best;
+  state.quietMove.row = row;
+  state.quietMove.verdict = loss == null ? null : verdict(loss, row.score);
+  state.quietMove.good = loss == null ? null : loss <= 50;
+  recordMixedStat({ kind: 'quiet', declared: state.mixed.declared, goodMove: state.quietMove.good });
+  state.finished = true;
+  go('resumen');
+}
+
+function recordMixedStat(entry) {
+  const stats = storage.get('stats', emptyStats());
+  storage.set('stats', { ...stats, mixed: recordMixed(stats.mixed, entry) });
+}
+
+function resumenQuiet() {
+  const { puzzle, mixed } = state;
+  const q = state.quietMove;
+  const top = puzzle.quiet.top.map((t) => ({ san: pvToSan(puzzle.fen, t.pv, 4), score: t.score }));
+  return h('section', {},
+    h('h2', {}, 'Era una posición tranquila'),
+    h('p', { class: mixed.declared === 'quiet' ? 'ok' : 'ko' }, mixed.declared === 'quiet'
+      ? 'Dijiste «toca mejorar»: bien, aquí no había táctica.'
+      : 'Dijiste «hay táctica», pero no había ninguna ganancia forzada: cuidado con inventar combinaciones.'),
+    q ? h('p', {}, h('strong', {}, `Tu jugada: ${q.san} `), q.verdict ? h('span', { class: `badge tone-${q.verdict.tone}` }, q.verdict.label) : h('span', { class: 'muted' }, 'sin evaluación'), q.row ? ` (${formatScore(q.row.score)}, ${describeAdvantage(q.row.score)})` : '') : null,
+    h('div', { class: 'top-moves' }, h('strong', {}, 'Las mejores según Stockfish'), h('ol', {}, top.map((t) => h('li', {}, h('strong', {}, t.san[0]), ` ${formatScore(t.score)} `, h('span', { class: 'muted small' }, t.san.slice(1).join(' ')))))),
+    h('p', { class: 'small' }, 'En las posiciones tranquilas cuentan las preguntas estratégicas: debilidades, peor pieza y qué quiere el rival.'),
+    h('p', {}, h('a', { href: puzzle.gameUrl, target: '_blank', rel: 'noopener' }, 'Partida original')),
   );
 }
 

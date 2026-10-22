@@ -57,6 +57,7 @@ export const LEVELS = {
 export const MODES = {
   tiempo: 'Con tiempo (proceso completo)',
   apuro: 'Sin tiempo (intuición + comprobación)',
+  mixto: '¿Táctica o mejora? (con posiciones tranquilas)',
 };
 
 export const BREATHING = { inhale: 7, exhale: 5, total: 30 };
