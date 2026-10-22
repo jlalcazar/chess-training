@@ -146,6 +146,9 @@ table.decision { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 table.decision th, table.decision td { border-bottom: 1px solid var(--border); padding: 6px; text-align: left; vertical-align: top; }
 table.decision td.yes { font-weight: 700; font-size: 1.1rem; text-align: center; }
 table.decision ul { margin: 0; padding-left: 16px; }
+button.toggle.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+button.toggle:disabled { opacity: 0.5; cursor: default; }
+.adding { color: var(--accent); font-weight: 600; }
 
 .breath { display: flex; flex-direction: column; align-items: center; gap: 6px; margin: 16px 0; }
 .breath-circle { width: 90px; height: 90px; border-radius: 50%; background: var(--accent); opacity: 0.6; }

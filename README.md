@@ -39,7 +39,10 @@ Parámetros de URL útiles para depurar:
    estructura…) son **abiertas**: escribes tu idea y la contrastas con el análisis.
 5. **Decisión**: cada candidata muestra cuántos "síes" consigue, qué deja colgado y si abre
    una **idea forzada de varias jugadas** (p. ej. "da jaque → ataque doble → ganas material"),
-   sin desvelar las jugadas.
+   sin desvelar las jugadas. Si las preguntas te sugirieron una jugada nueva, pulsa
+   **"Añadir candidata"** y muévela en el tablero: se apunta en la tabla (y cuenta como candidata
+   en las estadísticas) sin jugarse; si ya tienes 5, quita antes una. Sin ese botón, una jugada en
+   el tablero se juega directamente.
 6. **Jugar** la línea contra las respuestas del puzzle.
 7. **Repaso**: solución explicada paso a paso, temas, si la clave estaba entre tus candidatas y en
    qué preguntas fallaste. Bajo el tablero puedes **navegar por toda la partida** (⏮ ◀ Ejercicio ▶ ⏭

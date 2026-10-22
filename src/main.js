@@ -82,6 +82,7 @@ function newState(puzzle) {
     plan,
     step: settings.mode === 'tiempo' ? (settings.breathing ? 'calma' : 'candidatas') : 'intuicion',
     candidates: [],
+    addingCandidate: false, // en Decisión: el próximo movimiento en el tablero se apunta, no se juega
     intuition: null,
     questionIndex: 0,
     answers: {}, // id -> { user: boolean, result }
@@ -483,10 +484,8 @@ function evaluateWithIdea(fen, move) {
 }
 
 function addCandidate(move) {
-  const ev = evaluateWithIdea(state.puzzle.fen, move);
-  if (!ev || state.candidates.some((c) => c.uci === ev.uci)) return;
-  if (state.candidates.length >= MAX_CANDIDATES) return;
-  state.candidates.push(ev);
+  const ev = evaluateWithIdea(state.puzzle.fen, withPromotion(move, 0));
+  if (ev && state.candidates.length < MAX_CANDIDATES && !state.candidates.some((c) => c.uci === ev.uci)) state.candidates.push(ev);
   render();
 }
 
@@ -629,9 +628,12 @@ function showFindings(findings) {
 }
 
 function candidateReminder() {
+  const full = state.candidates.length >= MAX_CANDIDATES;
   return h('details', { class: 'reminder' },
     h('summary', {}, `¿Te sugiere una candidata nueva? (${state.candidates.length}/${MAX_CANDIDATES})`),
-    h('p', { class: 'small' }, 'Puedes añadirla en el paso de decisión.'),
+    h('p', { class: 'small' }, full
+      ? `Ya tienes ${MAX_CANDIDATES} candidatas, el máximo. Para apuntar otra, en el paso de decisión quita una y pulsa "Añadir candidata".`
+      : 'Recuérdala: en el paso de decisión pulsa "Añadir candidata" y muévela en el tablero. Se apunta en la tabla, no se juega.'),
     candidateList(false),
   );
 }
@@ -661,23 +663,47 @@ function estrategia() {
 // ------------------------------------------------------------- decisión
 
 function decision() {
-  const rows = state.candidates.map((c) =>
+  const rows = state.candidates.map((c, i) =>
     h('tr', {},
       h('td', {}, h('strong', {}, c.san)),
       h('td', { class: 'yes' }, String(c.yesCount)),
       h('td', {}, c.tags.length ? h('ul', {}, c.tags.map((t) => h('li', {}, t.text))) : h('span', { class: 'muted' }, '—'),
         c.warnings.length ? h('ul', { class: 'warnings' }, c.warnings.map((w) => h('li', {}, `⚠ ${w}`))) : null),
-      h('td', {}, h('button', { class: 'primary', onClick: () => onBoardMove(c.move) }, 'Jugar')),
+      h('td', {},
+        h('button', { class: 'primary', onClick: () => playDecision(c.move) }, 'Jugar'),
+        h('button', { class: 'link', onClick: () => { state.candidates.splice(i, 1); render(); } }, 'quitar'),
+      ),
     ),
   );
+  const full = state.candidates.length >= MAX_CANDIDATES;
+  const adding = state.addingCandidate;
   return h('section', {},
     h('h2', {}, '5. Decide'),
     h('p', {}, 'La mejor jugada suele responder SÍ a varias preguntas. Compara tus candidatas y revisa los avisos (qué dejas colgado).'),
     state.candidates.length
       ? h('table', { class: 'decision' }, h('thead', {}, h('tr', {}, h('th', {}, 'Jugada'), h('th', {}, 'Síes'), h('th', {}, 'Qué consigue'), h('th', {}))), h('tbody', {}, rows))
       : h('p', { class: 'muted' }, 'No apuntaste candidatas.'),
-    h('p', { class: 'small' }, 'También puedes jugar directamente cualquier jugada en el tablero.'),
+    h('div', { class: 'actions' },
+      h('button', {
+        class: adding ? 'toggle on' : 'toggle',
+        'aria-pressed': adding ? 'true' : 'false',
+        disabled: full,
+        title: full ? `Máximo ${MAX_CANDIDATES} candidatas: quita una para añadir otra` : null,
+        onClick: () => { state.addingCandidate = !state.addingCandidate; render(); },
+      }, adding ? 'Cancelar (no añadir)' : `Añadir candidata (${state.candidates.length}/${MAX_CANDIDATES})`),
+    ),
+    h('p', { class: adding ? 'small adding' : 'small' }, adding
+      ? 'Mueve en el tablero la jugada que te sugirieron las preguntas: se añade a la tabla, no se juega.'
+      : full
+        ? `Ya tienes ${MAX_CANDIDATES} candidatas: quita una para apuntar otra. Una jugada en el tablero se juega directamente.`
+        : 'Una jugada en el tablero se juega directamente. Para apuntarla antes como candidata, pulsa "Añadir candidata".'),
   );
+}
+
+function playDecision(move) {
+  state.addingCandidate = false;
+  go('resolver');
+  playUserMove(move);
 }
 
 // ------------------------------------------------------- modo sin tiempo
@@ -737,8 +763,9 @@ function onBoardMove(move) {
       return go('comprobacion');
     }
     case 'decision':
-      go('resolver');
-      return playUserMove(move);
+      if (!state.addingCandidate) return playDecision(move);
+      state.addingCandidate = false;
+      return addCandidate(move);
     case 'comprobacion':
       go('resolver');
       return playUserMove(move);
