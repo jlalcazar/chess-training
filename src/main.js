@@ -8,6 +8,7 @@ import { emptyStats, recordExercise, summarize } from './stats.js';
 import { CONFIDENCE, GLANCE_CASES, GLANCE_SECONDS, glanceCase } from './intuition.js';
 import { PHASE_NAMES, fixation, keyFirstSeen, phaseDurations } from './timeline.js';
 import { ERROR_INFO, classifyMistake, errorAdvice } from './errors.js';
+import { EVAL_SYMBOLS, blindQuestions, cpToSymbol, firstDeviation, gradeBlind, playLine, rivalNode, symbolOf } from './blindline.js';
 import { SRS_INTERVALS, dueReviews, dueText, emptyProgress, failCount, learnedPuzzles, legacyCount, recordAttempt, srsChange, themeSummary, upcomingReviews } from './progress.js';
 import { DIFFICULTIES, THEMES, THEME_HELP, fetchDailyPuzzle, fetchNextPuzzle, fetchPuzzleById, themeName } from './lichess.js';
 import {
@@ -283,7 +284,7 @@ function render() {
   const idx = steps.findIndex(([id]) => id === shown);
   const stepper = h('ol', { class: 'stepper' }, steps.map(([id, label], i) => h('li', { class: i < idx ? 'done' : i === idx ? 'current' : '' }, label)));
 
-  const views = { calma, cambios, vistazo, candidatas, tactica, estrategia, decision, permite, resolver, resumen, intuicion, comprobacion, remate };
+  const views = { calma, cambios, vistazo, candidatas, tactica, estrategia, calculo, decision, permite, resolver, resumen, intuicion, comprobacion, remate };
   panel.replaceChildren(header, stepper, views[state.step]());
   if (DEBUG) panel.append(h('details', { class: 'debug' }, h('summary', {}, 'Depuración'), h('pre', {}, JSON.stringify({ ...state, plan: undefined }, null, 2))));
   syncBoard();
@@ -309,6 +310,30 @@ function syncBoard() {
     board.setInteractive(f.status === 'playing' && !f.thinking);
     board.setArrows([]);
     board.setMarks({});
+    renderBoardNav();
+    return;
+  }
+  const entry = activeEntry();
+  if (entry) {
+    // Tablero quieto: las jugadas se generan desde la posición que tienes en la cabeza.
+    board.setPosition(entry.startFen, { orientation: state.puzzle.heroColor, lastMove: state.lastMove });
+    board.setMoveFen(entryLine(entry).fen, { showTargets: false });
+    board.setInteractive(!entryLine(entry).over);
+    board.setPickMode(false);
+    board.setArrows(lineArrows(entry));
+    board.setMarks({});
+    renderBoardMode();
+    renderBoardNav();
+    return;
+  }
+  board.setMoveFen(null);
+  if (state.step === 'resolver' && state.blind) {
+    // Preguntas o revisión de la línea a ciegas: el tablero sigue quieto.
+    if (state.blind.phase === 'questions') board.setPosition(state.blind.entry.startFen, { orientation: state.puzzle.heroColor, lastMove: state.lastMove });
+    board.setInteractive(false);
+    board.setPickMode(Boolean(state.pointing));
+    if (state.blind.phase === 'questions') board.setArrows(lineArrows(state.blind.entry));
+    renderBoardMode();
     renderBoardNav();
     return;
   }
@@ -344,6 +369,7 @@ function syncBoard() {
 function clickMode() {
   const { step } = state;
   if (state.pointing) return { kind: 'pick', text: 'Clic: señalar casillas (otra vez para quitarla)' };
+  if (activeEntry()) return { kind: 'line', text: 'Clic: introducir la línea (el tablero no se mueve)' };
   switch (step) {
     case 'candidatas':
       return { kind: 'candidate', text: 'Clic: apuntar candidata (no se juega)' };
@@ -1114,7 +1140,9 @@ function decision() {
     state.candidates.length
       ? h('table', { class: 'decision' }, h('thead', {}, h('tr', {}, h('th', {}, 'Jugada'), h('th', {}, 'Síes'), h('th', {}, 'Qué consigue'), h('th', {}))), h('tbody', {}, rows))
       : h('p', { class: 'muted' }, 'No apuntaste candidatas.'),
+    calcSummary(),
     h('div', { class: 'actions' },
+      !state.calc?.chosen && state.candidates.length ? h('button', { onClick: () => { if (!state.flow.includes('calculo')) state.flow.splice(state.flow.indexOf('decision'), 0, 'calculo'); go('calculo'); }, title: 'Compara dos candidatas calculando sus líneas a ciegas' }, 'Comparar dos candidatas (Calcular)') : null,
       h('button', {
         class: adding ? 'toggle on' : 'toggle',
         'aria-pressed': adding ? 'true' : 'false',
@@ -1301,6 +1329,11 @@ function comprobacion() {
 
 function onBoardMove(move) {
   if (!state) return;
+  const entry = activeEntry();
+  if (entry) {
+    if (addLineMove(entry, move)) render();
+    return;
+  }
   switch (state.step) {
     case 'candidatas':
       return addCandidate(move);
@@ -1511,10 +1544,15 @@ function resolver() {
     children.push(h('p', { class: 'muted' }, 'Mostrando la solución…'));
     return h('section', {}, ...children);
   }
+  if (state.blind) {
+    children.push(blindView());
+    return h('section', {}, ...children);
+  }
   if (state.hint) children.push(hintView());
   children.push(h('div', { class: 'actions' },
-    state.hint < 3 ? h('button', { onClick: nextHint }, `Pista (${state.hint + 1}/3)`) : null,
+    state.hint < 3 ? h('button', { 'data-key': '?', onClick: nextHint }, `Pista (${state.hint + 1}/3)`) : null,
     h('button', { onClick: revealSolution }, 'Ver la solución'),
+    state.ply < state.puzzle.solution.length - 1 ? h('button', { onClick: startBlind, title: 'El tablero se queda quieto y calculas la línea entera' }, 'Introduce la línea entera') : null,
   ));
   return h('section', {}, ...children);
 }
@@ -1531,6 +1569,333 @@ function lineSweepView() {
     mates ? ' (¡alguno es mate!)' : '',
     `. El rival, si le tocara: ${n(theirs.checks, 'jaque', 'jaques')}, ${n(theirs.captures, 'captura', 'capturas')} y ${n(theirs.threats, 'amenaza', 'amenazas')}.`,
   );
+}
+
+// ------------------------------------------------- líneas a ciegas
+
+/** Las flechas de la línea a ciegas: en Avanzado y Experto se ocultan por defecto. */
+function blindArrowsVisible() {
+  if (settings.blindArrows === 'on') return true;
+  if (settings.blindArrows === 'off') return false;
+  return !['avanzado', 'experto'].includes(settings.level);
+}
+
+/** La línea que se está introduciendo ahora (tablero quieto), si la hay. */
+function activeEntry() {
+  if (state.step === 'resolver' && state.blind?.phase === 'input') return state.blind.entry;
+  if (state.step === 'calculo' && state.calc?.current) {
+    const entry = state.calc.lines[state.calc.current];
+    if (!entry.done) return entry;
+  }
+  return null;
+}
+
+const entryLine = (entry) => playLine(entry.startFen, entry.ucis);
+
+function lineArrows(entry) {
+  if (!blindArrowsVisible()) return [];
+  return entryLine(entry).moves.map((m, i) => ({ from: m.from, to: m.to, tone: m.by === 'you' ? 'mine' : 'theirs', label: i + 1 }));
+}
+
+/** Añade una jugada a la línea (desde el tablero o escrita en SAN). */
+function addLineMove(entry, move) {
+  const line = entryLine(entry);
+  if (line.over) return false;
+  const chess = load(line.fen);
+  let m;
+  try {
+    m = chess.move(typeof move === 'string' ? move : { ...move, promotion: move.promotion ?? 'q' });
+  } catch {
+    return false;
+  }
+  const uci = uciOf(m);
+  // En las jugadas del rival se apunta lo que has mirado (paso Calcular).
+  if (m.color !== state.puzzle.heroColor) entry.considered[entry.ucis.length] = [...new Set([...(entry.considered[entry.ucis.length] ?? []), uci])];
+  entry.ucis.push(uci);
+  track('lineMove', { uci });
+  return true;
+}
+
+/** Lista de la línea, campo para escribir jugadas y botones de deshacer. */
+function lineEntryView(entry, { max = Infinity, onDone, doneLabel = 'Terminar la línea', extra = null } = {}) {
+  const line = entryLine(entry);
+  const startChess = load(entry.startFen);
+  const startNo = Number(entry.startFen.split(' ')[5]);
+  const blackFirst = startChess.turn() === 'b';
+  const items = line.moves.map((m, i) => {
+    const absolute = i + (blackFirst ? 1 : 0);
+    const no = startNo + Math.floor(absolute / 2);
+    const prefix = absolute % 2 === 0 ? `${no}.` : i === 0 ? `${no}...` : '';
+    return h('span', { class: `line-move by-${m.by}` }, `${prefix}${m.san} `);
+  });
+  const input = h('input', { type: 'text', class: 'san-input', placeholder: 'Escribe la jugada (p. ej. Cf3 o Nf3) y pulsa Intro', 'aria-label': 'Jugada en notación algebraica' });
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Enter') return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const raw = input.value.trim();
+    if (addLineMove(entry, raw) || addLineMove(entry, spanishSan(raw))) render();
+    else input.setCustomValidity('Jugada no válida en la posición de tu cabeza');
+    input.reportValidity();
+  });
+  const full = line.moves.length >= max || line.over;
+  const turn = load(line.fen).turn() === state.puzzle.heroColor ? 'Te toca a ti' : 'Le toca al rival';
+  return h('div', { class: 'line-entry' },
+    h('p', { class: 'line-moves' }, items.length ? items : h('span', { class: 'muted' }, 'Todavía no hay jugadas.')),
+    line.over ? h('p', { class: 'small ok' }, line.mate ? 'La línea acaba en mate.' : 'La partida termina aquí.') : h('p', { class: 'small' }, full ? 'Has llegado al final de la línea.' : `${turn}: mueve en el tablero (sin que se mueva nada) o escribe la jugada.`),
+    full ? null : input,
+    extra,
+    h('div', { class: 'actions' },
+      h('button', { class: 'primary', 'data-key': 'enter', disabled: !line.moves.length, onClick: onDone }, doneLabel),
+      h('button', { disabled: !entry.ucis.length || entry.ucis.length <= (entry.fixed ?? 0), onClick: () => { entry.ucis.pop(); render(); } }, 'Deshacer'),
+    ),
+  );
+}
+
+/** Notación española a inglesa: C caballo, A alfil, T torre, D dama, R rey ("Cf3" → "Nf3"). */
+function spanishSan(san) {
+  const map = { C: 'N', A: 'B', T: 'R', D: 'Q', R: 'K' };
+  return san.replace(/^[CATDR]/, (x) => map[x]).replace(/=([CATD])/, (_, x) => `=${map[x]}`);
+}
+
+// -------------------------------------- paso: calcular dos candidatas
+
+function calculo() {
+  const c = (state.calc ??= { picks: [...state.candidates].sort((a, b) => b.yesCount - a.yesCount).slice(0, 2).map((x) => x.uci), lines: {}, order: [], current: null, chosen: false });
+  const title = h('h2', {}, `${stepNo('calculo')}. Calcula y compara dos candidatas`);
+  const toDecision = () => go(nextStep('calculo'));
+  if (!state.candidates.length) {
+    return h('section', {}, title, h('p', {}, 'No hay candidatas que comparar.'), h('div', { class: 'actions' }, h('button', { class: 'primary', onClick: toDecision }, 'Ir a decidir')));
+  }
+  if (!c.chosen) {
+    return h('section', {}, title,
+      h('p', {}, 'Elige hasta 2 candidatas (preseleccionadas las que tienen más «síes»). Para cada una introducirás la línea a ciegas hasta donde creas que hay que parar: una posición tranquila, sin jaques ni capturas pendientes.'),
+      h('ul', { class: 'calc-picks' }, state.candidates.map((x) => h('li', {}, h('label', { class: 'check' },
+        h('input', {
+          type: 'checkbox',
+          checked: c.picks.includes(x.uci),
+          onChange: (e) => {
+            c.picks = e.target.checked ? [...c.picks, x.uci].slice(-2) : c.picks.filter((u) => u !== x.uci);
+            render();
+          },
+        }), ` ${x.san} `, h('span', { class: 'muted small' }, `(${x.yesCount} síes)`))))),
+      h('div', { class: 'actions' },
+        h('button', {
+          class: 'primary',
+          disabled: !c.picks.length,
+          onClick: () => {
+            c.chosen = true;
+            c.order = [...c.picks];
+            for (const uci of c.order) c.lines[uci] = { startFen: state.puzzle.fen, ucis: [uci], fixed: 1, considered: {}, done: false, eval: null };
+            c.current = c.order[0];
+            track('calcStart', { picks: c.order });
+            render();
+          },
+        }, 'Calcular'),
+        h('button', { class: 'link', onClick: toDecision }, 'Saltar este paso'),
+      ));
+  }
+  const entry = c.current ? c.lines[c.current] : null;
+  if (entry && !entry.done) {
+    const line = entryLine(entry);
+    const rivalToMove = load(line.fen).turn() !== state.puzzle.heroColor && !line.over;
+    const lastRival = !rivalToMove && entry.ucis.length > 1 && line.moves.at(-1)?.by === 'rival';
+    let counter = null;
+    if (rivalToMove || lastRival) {
+      const idx = rivalToMove ? entry.ucis.length : entry.ucis.length - 1;
+      const fen = rivalToMove ? line.fen : playLine(entry.startFen, entry.ucis.slice(0, -1)).fen;
+      const node = rivalNode(fen, entry.considered[idx] ?? []);
+      counter = h('p', { class: `small node ${node.total && node.seen < node.total ? 'ko' : 'ok'}` },
+        node.total
+          ? `Aquí el rival tiene ${node.checks} ${node.checks === 1 ? 'jaque' : 'jaques'} y ${node.captures} ${node.captures === 1 ? 'captura' : 'capturas'}; has mirado ${node.seen} de ${node.total}.`
+          : 'Aquí el rival no tiene jaques ni capturas.',
+        lastRival ? ' ' : null,
+        lastRival ? h('button', { class: 'link', onClick: () => { entry.ucis.pop(); render(); } }, 'Mirar otra respuesta') : null);
+    }
+    const n = c.order.indexOf(c.current) + 1;
+    return h('section', {}, title,
+      h('h3', {}, `Línea ${n} de ${c.order.length}: empieza con ${line.moves[0]?.san}`),
+      h('p', { class: 'small' }, 'Introduce las respuestas del rival y tus jugadas sin mover el tablero. Para las respuestas del rival puedes mirar varias: juega una, pulsa «Mirar otra respuesta» y prueba otra.'),
+      lineEntryView(entry, { onDone: () => { entry.done = true; track('calcLine', { uci: c.current, plies: entry.ucis.length }); render(); }, doneLabel: 'Aquí paro', extra: counter }),
+    );
+  }
+  if (entry && entry.eval == null) {
+    return h('section', {}, title,
+      h('h3', {}, `¿Cómo valoras la posición final de ${entryLine(entry).moves.map((m) => m.san).join(' ')}?`),
+      h('p', { class: 'small' }, 'Desde tu punto de vista. Valorar la posición donde paras es la mitad del cálculo.'),
+      h('div', { class: 'actions eval-buttons' }, EVAL_SYMBOLS.map((e, i) => h('button', {
+        'data-key': String(i + 1),
+        title: e.text,
+        onClick: () => {
+          entry.eval = e.id;
+          track('calcEval', { uci: c.current, eval: e.id });
+          c.current = c.order.find((u) => !c.lines[u].done) ?? null;
+          render();
+        },
+      }, `${e.symbol} ${e.text}`))),
+    );
+  }
+  return h('section', {}, title,
+    h('p', {}, 'Ya tienes las dos líneas. En la decisión verás las dos posiciones finales lado a lado.'),
+    calcSummary(),
+    h('div', { class: 'actions' }, h('button', { class: 'primary', 'data-key': 'enter', onClick: toDecision }, 'Ir a decidir')),
+  );
+}
+
+/** Las posiciones finales de las líneas calculadas, en tableros pequeños lado a lado. */
+function calcSummary() {
+  const c = state.calc;
+  if (!c?.chosen) return null;
+  const done = c.order.filter((u) => c.lines[u].done);
+  if (!done.length) return null;
+  return h('div', { class: 'calc-boards' }, done.map((uci) => {
+    const entry = c.lines[uci];
+    const line = entryLine(entry);
+    const el = h('div', { class: 'mini-board' });
+    const mini = new Board(el);
+    mini.setPosition(line.fen, { orientation: state.puzzle.heroColor, lastMove: line.moves.at(-1) ? { from: line.moves.at(-1).from, to: line.moves.at(-1).to } : null });
+    const sym = entry.eval != null ? symbolOf(entry.eval) : null;
+    const real = state.engine?.calcEvals?.[uci];
+    return h('figure', { class: 'calc-line' },
+      el,
+      h('figcaption', {},
+        h('strong', {}, line.moves.map((m) => m.san).join(' ')),
+        sym ? h('div', {}, `Tu valoración: ${sym.symbol} (${sym.text})`) : null,
+        real ? h('div', { class: real.symbol === entry.eval ? 'ok' : 'ko' }, `Stockfish: ${symbolOf(real.symbol).symbol} (${formatScore(real.score)})`) : null),
+    );
+  }));
+}
+
+/** Empieza la línea a ciegas en el paso Jugar. */
+function startBlind() {
+  state.blind = { entry: { startFen: state.playFen, ucis: [], considered: {} }, startPly: state.ply, phase: 'input', answers: {}, qi: 0 };
+  track('blindStart', {});
+  render();
+}
+
+function blindView() {
+  const b = state.blind;
+  const remaining = state.puzzle.solution.length - b.startPly;
+  if (b.phase === 'input') {
+    return h('div', { class: 'blind-box' },
+      h('h3', {}, 'Introduce la línea entera'),
+      h('p', { class: 'small' }, `El tablero se queda quieto: introduce tus jugadas y las respuestas que esperas del rival (hasta ${remaining}). ${blindArrowsVisible() ? 'Se dibujan como flechas numeradas: azul las tuyas, naranja las del rival.' : 'Sin flechas: la línea solo está en tu cabeza.'} Las jugadas que coincidan con la solución se darán por jugadas; si te apartas en una jugada tuya, cuenta como fallo.`),
+      lineEntryView(b.entry, { max: remaining, onDone: () => { b.qs = blindQuestions(b.entry.startFen, b.entry.ucis); b.phase = 'questions'; b.qi = 0; render(); } }),
+      h('button', { class: 'link', onClick: () => { state.blind = null; render(); } }, 'Cancelar la línea a ciegas'),
+    );
+  }
+  if (b.phase === 'questions') {
+    const q = b.qs[b.qi];
+    const answer = (value) => {
+      b.answers[q.id] = value;
+      state.pointing = null;
+      board.setMarks({});
+      b.qi++;
+      if (b.qi >= b.qs.length) return reviewBlind();
+      return render();
+    };
+    const controls = [];
+    if (q.kind === 'square' || q.kind === 'squares') {
+      if (!state.pointing) beginPointing();
+      if (q.kind === 'square') state.pointing.max = 1;
+      controls.push(h('p', { class: 'small' }, 'Toca la casilla en el tablero (la posición final solo está en tu cabeza).'),
+        h('div', { class: 'actions' },
+          h('button', { class: 'primary', 'data-key': 'enter', onClick: () => answer(q.kind === 'square' ? state.pointing?.picks[0] ?? null : [...(state.pointing?.picks ?? [])]) }, 'Listo'),
+          q.kind === 'squares' ? h('button', { 'data-key': 'n', onClick: () => answer([]) }, 'Ninguna') : null));
+    } else if (q.kind === 'choice') {
+      controls.push(h('div', { class: 'actions' }, Object.entries(q.options).map(([id, label], i) => h('button', { 'data-key': String(i + 1), onClick: () => answer(id) }, label))));
+    } else {
+      controls.push(h('div', { class: 'actions' }, h('button', { 'data-key': 's', onClick: () => answer(true) }, 'Sí'), h('button', { 'data-key': 'n', onClick: () => answer(false) }, 'No')));
+    }
+    return h('div', { class: 'blind-box' },
+      h('h3', {}, `Sobre la posición final (${b.qi + 1}/${b.qs.length})`),
+      h('p', {}, q.text),
+      ...controls,
+    );
+  }
+  // Revisión: la línea comparada con la solución y las preguntas corregidas.
+  const line = entryLine(b.entry);
+  const sol = state.puzzle.solution.slice(b.startPly);
+  const dev = b.deviation;
+  const solSan = playLine(b.entry.startFen, sol).moves.map((m) => m.san);
+  return h('div', { class: 'blind-box' },
+    h('h3', {}, 'Tu línea comparada con la solución'),
+    h('p', { class: 'line-moves' }, line.moves.map((m, i) => h('span', { class: `line-move ${dev === -1 || i < dev ? 'ok' : i === dev ? 'ko' : 'muted'}` }, `${i === dev ? '✘ ' : i < dev || dev === -1 ? '✔ ' : ''}${m.san} `))),
+    dev >= 0 ? h('p', { class: 'small ko' }, `La primera que se aparta es ${line.moves[dev].san} (${line.moves[dev].by === 'you' ? 'tuya' : 'del rival'}): en la solución era ${solSan[dev] ?? '—'}.`) : h('p', { class: 'small ok' }, 'Toda tu línea coincide con la solución.'),
+    h('ul', { class: 'blind-answers' }, b.qs.map((q) => {
+      const ok = gradeBlind(q, b.answers[q.id]);
+      const right = q.kind === 'choice' ? q.options[q.answer] : q.kind === 'yesno' ? `${q.answer ? 'Sí' : 'No'} (${q.detail})` : q.answer.length ? q.answer.join(', ') : 'ninguna';
+      return h('li', { class: ok ? 'ok' : 'ko' }, `${ok ? '✔' : '✘'} ${q.text} `, h('span', { class: 'muted' }, `Respuesta: ${right}.`));
+    })),
+    h('div', { class: 'actions' }, h('button', { class: 'primary', 'data-key': 'enter', onClick: applyBlind }, 'Seguir con el ejercicio')),
+  );
+}
+
+/** Reproduce tu línea en el tablero y pasa a la revisión. */
+function reviewBlind() {
+  const b = state.blind;
+  b.phase = 'review';
+  b.deviation = firstDeviation(b.entry.startFen, b.entry.ucis, state.puzzle.solution.slice(b.startPly));
+  const ok = b.qs.filter((q) => gradeBlind(q, b.answers[q.id])).length;
+  state.blindLog = [...(state.blindLog ?? []), { moves: b.entry.ucis.length, deviation: b.deviation, questions: b.qs.length, correct: ok }];
+  track('blindDone', { deviation: b.deviation, correct: ok });
+  render();
+  const current = state;
+  const replay = load(b.entry.startFen);
+  const moves = entryLine(b.entry).moves;
+  board.setInteractive(false);
+  let i = 0;
+  const stepFn = () => {
+    if (state !== current || state.blind !== b) return;
+    if (i >= moves.length) {
+      board.setArrows(moves.map((m, k) => ({ from: m.from, to: m.to, tone: m.by === 'you' ? 'mine' : 'theirs', label: k + 1 })));
+      if (b.deviation >= 0) board.setMarks({ [moves[b.deviation].to]: 'missed' });
+      return;
+    }
+    const m = replay.move(uciToMove(moves[i++].uci));
+    board.setPosition(replay.fen(), { lastMove: { from: m.from, to: m.to } });
+    setTimeout(stepFn, 700);
+  };
+  setTimeout(stepFn, 300);
+}
+
+/** Da por jugadas las jugadas que coinciden; en la primera que se aparta, se juega como en el tablero. */
+function applyBlind() {
+  const b = state.blind;
+  state.blind = null;
+  board.setMarks({});
+  const ucis = b.entry.ucis;
+  const until = b.deviation === -1 ? ucis.length : b.deviation;
+  const chess = load(state.playFen);
+  for (let i = 0; i < until; i++) {
+    const m = chess.move(uciToMove(ucis[i]));
+    if (m.color !== state.puzzle.heroColor) state.predictions.push({ ply: state.ply, uci: ucis[i], san: m.san, ok: true, blind: true });
+    track('move', { uci: ucis[i], ply: state.ply, ok: true, blind: true });
+    state.ply++;
+    state.playFen = chess.fen();
+    state.lastMove = { from: m.from, to: m.to };
+    if (chess.isCheckmate() || state.ply >= state.puzzle.solution.length) {
+      state.ply = state.puzzle.solution.length;
+      board.setPosition(state.playFen, { lastMove: state.lastMove });
+      return finish(true);
+    }
+  }
+  state.feedback = null;
+  if (b.deviation >= 0) {
+    const dev = ucis[b.deviation];
+    if (b.deviation % 2 === 0) {
+      // Jugada tuya distinta: cuenta como jugada en el tablero (y como fallo).
+      render();
+      return playUserMove(uciToMove(dev));
+    }
+    // Respuesta del rival distinta: predicción fallida; el rival juega la de la solución.
+    const san = playLine(state.playFen, [dev]).moves[0]?.san ?? dev;
+    state.predictions.push({ ply: state.ply, uci: dev, san, ok: false, blind: true });
+    return playRivalReply({ san, ok: false });
+  }
+  // La línea era más corta: si ahora le toca al rival, responde él.
+  if (load(state.playFen).turn() !== state.puzzle.heroColor) return playRivalReply();
+  return render();
 }
 
 const QUESTION_BY_ID = Object.fromEntries(TACTICAL_QUESTIONS.map((q) => [q.id, q.text]));
@@ -1750,6 +2115,7 @@ async function startEngine() {
     render();
     await explainMistakes(run);
     await rivalBestReply(run);
+    await evaluateCalcLines(run);
     evaluateShownPosition();
   } catch (err) {
     if (run !== engineRun) return;
@@ -1776,6 +2142,27 @@ async function rivalBestReply(run) {
   const feared = state.safetyLog?.findLast((x) => x.uci === uci)?.guess;
   state.engine.rivalBest = { after: pvToSan(state.puzzle.fen, [uci], 1)[0], san, uci: r.pv[0], score: r.score, feared };
   render();
+}
+
+/** Paso Calcular: Stockfish valora la posición final de cada línea («Valoraste = y era ±»). */
+async function evaluateCalcLines(run) {
+  const c = state.calc;
+  if (!c?.chosen) return;
+  for (const uci of c.order) {
+    const entry = c.lines[uci];
+    if (!entry.done) continue;
+    const line = entryLine(entry);
+    let score;
+    if (line.mate) score = { mate: load(line.fen).turn() === state.puzzle.heroColor ? -1 : 1 };
+    else if (line.over) score = { cp: 0 };
+    else {
+      const r = await engine.evaluate(line.fen, { depth: 12 });
+      if (run !== engineRun) return;
+      score = load(line.fen).turn() === state.puzzle.heroColor ? r.score : r.score.mate != null ? { mate: -r.score.mate } : { cp: -r.score.cp };
+    }
+    (state.engine.calcEvals ??= {})[uci] = { score, symbol: cpToSymbol(Math.max(-10000, Math.min(10000, toCp(score)))) };
+    render();
+  }
 }
 
 /** Para cada jugada fallida: qué responde el rival y qué era mejor (siempre con Stockfish). */
@@ -1914,6 +2301,14 @@ function engineSection() {
   }
   const mistakes = mistakesView(ev);
   if (mistakes) box.append(mistakes);
+  if (ev.calcEvals && state.calc?.chosen) {
+    box.append(h('div', { class: 'small' }, h('strong', {}, 'Tus líneas del paso Calcular'), h('ul', {}, state.calc.order.filter((u) => ev.calcEvals[u]).map((u) => {
+      const entry = state.calc.lines[u];
+      const mine = entry.eval != null ? symbolOf(entry.eval).symbol : '—';
+      const real = symbolOf(ev.calcEvals[u].symbol).symbol;
+      return h('li', { class: entry.eval === ev.calcEvals[u].symbol ? 'ok' : 'ko' }, `${entryLine(entry).moves.map((m) => m.san).join(' ')}: valoraste ${mine} y era ${real} (${formatScore(ev.calcEvals[u].score)}).`);
+    }))));
+  }
   if (ev.rivalBest?.san.length) {
     const rb = ev.rivalBest;
     // La puntuación es del rival: se da la vuelta para leerla desde tu lado.
