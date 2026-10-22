@@ -34,6 +34,7 @@ export const emptyProgress = () => ({ version: PROGRESS_VERSION, puzzles: {}, le
 
 /** Grupo de cada tema de Lichess: lo que interesa para estudiar son táctica, mates y fases. */
 export function themeGroup(theme) {
+  if (theme === 'misPartidas' || theme.startsWith('propia')) return 'propias';
   if (['oneMove', 'short', 'long', 'veryLong'].includes(theme)) return 'longitud';
   if (['crushing', 'advantage', 'equality'].includes(theme)) return 'evaluacion';
   if (['master', 'masterVsMaster', 'superGM', 'playerGames'].includes(theme)) return 'origen';
@@ -43,6 +44,7 @@ export function themeGroup(theme) {
 }
 
 export const THEME_GROUPS = {
+  propias: 'Tus partidas (autoevaluación)',
   tactica: 'Motivos tácticos',
   mate: 'Mates',
   fase: 'Fases de la partida',
@@ -52,7 +54,7 @@ export const THEME_GROUPS = {
 };
 
 /** Grupos que señalan "áreas a estudiar" (los demás solo se muestran). */
-const STUDY_GROUPS = ['tactica', 'mate', 'fase'];
+const STUDY_GROUPS = ['tactica', 'mate', 'fase', 'propias'];
 
 // --------------------------------------------------------------- intentos
 

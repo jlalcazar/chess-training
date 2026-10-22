@@ -193,3 +193,9 @@ test('el intento fallado guarda qué paso falló (para recordarlo en el repaso)'
   const ok = recordAttempt(p, puzzle('A', ['fork']), { success: true, now: T0 + 86400000 });
   assert.equal(ok.puzzles.A.attempts[1].detail, undefined, 'los aciertos no llevan detalle');
 });
+
+test('los temas de tus partidas tienen su grupo', () => {
+  assert.equal(themeGroup('misPartidas'), 'propias');
+  assert.equal(themeGroup('propiaProfilaxis'), 'propias');
+  assert.equal(themeGroup('fork'), 'tactica');
+});

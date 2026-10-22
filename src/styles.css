@@ -416,3 +416,5 @@ table.decision tbody tr { cursor: pointer; }
 .woodpecker-line { margin: 4px 0 0; color: var(--muted); }
 .woodpecker { border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; margin: 12px 0; }
 .woodpecker h3 { margin: 4px 0; }
+.own-search { display: flex; gap: 8px; margin: 10px 0; }
+.own-search input { flex: 1 1 auto; min-width: 0; }

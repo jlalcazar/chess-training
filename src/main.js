@@ -11,6 +11,7 @@ import { ERROR_INFO, classifyMistake, errorAdvice } from './errors.js';
 import { PROMOTION, STAGES, ladder, planQuestions, updateScaffold } from './scaffold.js';
 import { classifyMove, graphPaths } from './evalgraph.js';
 import { isQuietPosition, quietCandidates, quietReason, recordMixed } from './mixed.js';
+import { SELF_QUESTIONS, describeOwn, fetchUserGames, gameExercises, selfSummary } from './selfgames.js';
 import { BURST_SECONDS, PACES, WOODPECKER_SIZE, addPuzzle, balancePositions, burstSummary, cycleMode, cycleNumber, gamePositions, newWoodpecker, nextInCycle, nextPace, recordBurst, recordWoodpecker, rng, shuffle, startNextCycle, woodpeckerStatus } from './drills.js';
 import { EVAL_SYMBOLS, blindQuestions, cpToSymbol, firstDeviation, gradeBlind, playLine, rivalNode, symbolOf } from './blindline.js';
 import { SRS_INTERVALS, startOfDay, dueReviews, dueText, emptyProgress, failCount, learnedPuzzles, legacyCount, recordAttempt, srsChange, themeSummary, upcomingReviews } from './progress.js';
@@ -172,6 +173,7 @@ function renderSettings() {
     h('button', { id: 'review-button', class: due ? 'review-due' : '', onClick: openReview, title: 'Ejercicios fallados para repetir de forma espaciada' }, due ? `Repaso (${due})` : 'Repaso'),
     h('button', { onClick: openThemes, title: 'Resueltos y no resueltos por tema' }, 'Temas'),
     h('button', { onClick: openBurst, title: '2 minutos de una sola pregunta, posiciones seguidas' }, 'Ráfaga'),
+    h('button', { onClick: openOwnGames, title: 'Tus errores en tus partidas de Lichess, convertidos en ejercicios' }, 'Mis partidas'),
     h('button', { onClick: openStats }, 'Estadísticas'),
     h('button', { onClick: openOptions, title: 'Opciones de entrenamiento: pasos y ayudas que puedes activar o quitar' }, 'Opciones'),
   );
@@ -311,7 +313,8 @@ function render() {
 
   const views = { declarar, mover, calma, cambios, vistazo, candidatas, tactica, estrategia, calculo, decision, permite, resolver, resumen, intuicion, comprobacion, remate };
   const reminder = state.step !== 'resumen' && state.step !== 'remate' ? state.lastFail ??= lastFailNote() ?? false : null;
-  panel.replaceChildren(...[header, state.woodpecker ? woodpeckerLine() : null, stepper, reminder || null, views[state.step]()].filter(Boolean));
+  const own = state.puzzle.own && !reminder && state.step !== 'resumen' ? h('div', { class: 'last-fail' }, `${describeOwn(state.puzzle)}. Busca algo mejor.`) : null;
+  panel.replaceChildren(...[header, state.woodpecker ? woodpeckerLine() : null, stepper, reminder || own, views[state.step]()].filter(Boolean));
   if (DEBUG) panel.append(h('details', { class: 'debug' }, h('summary', {}, 'Depuración'), h('pre', {}, JSON.stringify({ ...state, plan: undefined }, null, 2))));
   syncBoard();
 }
@@ -2246,6 +2249,8 @@ function lastFailNote() {
   const last = rec?.attempts?.findLast((a) => !a.success && !(a.at >= state.startedAt));
   if (!last) return null;
   const d = last.detail;
+  // Importado de tus partidas: lo que jugaste en la partida.
+  if (d?.fromGame) return h('div', { class: 'last-fail' }, `En tu partida jugaste ${d.moveNumber}${state.puzzle.heroColor === 'w' ? '.' : '...'} ${d.played} (${d.judgment.toLowerCase()}). Busca algo mejor.`);
   const parts = [];
   if (d?.questions?.length) parts.push(`fallaste ${d.questions.length === 1 ? 'la pregunta' : 'las preguntas'} ${d.questions.map((id) => `«${ALL_QUESTIONS.find((q) => q.id === id)?.text ?? id}»`).join(', ')}`);
   if (d?.keyMissed) parts.push(`la clave no estaba entre tus candidatas${d.blind?.length ? ` (punto ciego: ${d.blind.map((b) => BLIND_SPOTS[b]).join('; ')})` : ''}`);
@@ -3416,6 +3421,78 @@ function woodpeckerSection(weakest) {
   if (!theme) return h('div', { class: 'woodpecker' }, h('h3', {}, 'Ciclo Woodpecker'), intro, h('p', { class: 'muted small' }, 'Cuando tengas un área a estudiar (o elijas un tema) podrás empezar un ciclo.'));
   return h('div', { class: 'woodpecker' }, h('h3', {}, 'Ciclo Woodpecker'), intro,
     h('div', { class: 'actions' }, h('button', { class: 'primary', onClick: () => startWoodpecker(theme) }, `Ciclo Woodpecker: ${themeName(theme)}`)));
+}
+
+// ------------------------------------------- tus partidas de Lichess
+
+let ownGames = null; // { user, games, exercises, added }
+
+function openOwnGames() {
+  const input = h('input', { type: 'text', class: 'san-input', value: settings.lichessUser ?? '', placeholder: 'Tu usuario de Lichess', 'aria-label': 'Usuario de Lichess', autocomplete: 'username' });
+  const status = h('p', { class: 'muted small' }, 'Se piden tus 20 últimas partidas con análisis de Lichess. Tus imprecisiones, errores y errores graves se convierten en ejercicios.');
+  const search = async () => {
+    const user = input.value.trim();
+    if (!user) return;
+    settings.lichessUser = user;
+    saveSettings();
+    status.textContent = 'Pidiendo tus partidas a Lichess…';
+    try {
+      const games = await fetchUserGames(user, { max: 20 });
+      ownGames = { user, games: games.length, exercises: games.flatMap((g) => gameExercises(g, user)), added: null };
+    } catch (err) {
+      ownGames = null;
+      status.textContent = err.message;
+      status.className = 'error';
+      return;
+    }
+    openOwnGames();
+  };
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      search();
+    }
+  });
+  const ex = ownGames?.user === settings.lichessUser ? ownGames : null;
+  openDialog('own-dialog', 'Mis partidas de Lichess',
+    h('div', { class: 'own-search' }, input, h('button', { class: 'primary', onClick: search }, 'Buscar mis errores')),
+    status,
+    ex ? ownGamesView(ex) : null,
+  );
+}
+
+function ownGamesView(ex) {
+  if (!ex.exercises.length) return h('p', {}, `En ${ex.games} ${ex.games === 1 ? 'partida analizada' : 'partidas analizadas'} no hay imprecisiones, errores ni errores graves tuyos. Analiza tus partidas en Lichess («Análisis por ordenador») para que aparezcan.`);
+  const summary = selfSummary(ex.exercises);
+  const progress = loadProgress();
+  const add = () => {
+    let p = loadProgress();
+    let added = 0;
+    for (const e of ex.exercises) {
+      if (p.puzzles[e.id]) continue;
+      p = recordAttempt(p, e, { success: false, mistakes: 1, now: Date.now(), detail: { fromGame: true, played: e.own.played, judgment: e.own.judgment, moveNumber: e.own.moveNumber, questions: [], kinds: [] } });
+      added++;
+    }
+    storage.set('progress', p);
+    ex.added = added;
+    refreshReviewBadge();
+    openOwnGames();
+  };
+  return h('div', {},
+    h('p', {}, h('strong', {}, `${ex.exercises.length} ${ex.exercises.length === 1 ? 'error tuyo' : 'errores tuyos'}`), ` en ${ex.games} ${ex.games === 1 ? 'partida analizada' : 'partidas analizadas'}.`),
+    h('h3', {}, 'Las 5 preguntas de autoevaluación'),
+    h('ul', { class: 'blind-stats' }, summary.map((q) => h('li', {}, h('strong', {}, `${q.label}: ${q.n}`), h('span', { class: 'muted small' }, ` · ${q.question}`), bar(q.n / ex.exercises.length, q.n ? 'bad' : 'good')))),
+    h('div', { class: 'actions' },
+      h('button', { class: 'primary', onClick: add }, 'Añadir a mis temas y repaso'),
+      h('button', { onClick: () => { closeDialogs(); loadPuzzle(ex.exercises[0]); } }, 'Practicar el primero')),
+    ex.added != null ? h('p', { class: 'ok small' }, `Añadidos ${ex.added}. Los ya guardados no se repiten. Entran en Temas («Tus partidas») y en el repaso a partir de mañana.`) : null,
+    h('ul', { class: 'review-list' }, ex.exercises.map((e) => h('li', {},
+      h('a', { href: e.puzzleUrl, target: '_blank', rel: 'noopener' }, `${e.own.moveNumber}${e.heroColor === 'w' ? '.' : '...'} ${e.own.played}`),
+      ' ', h('span', { class: `badge tone-${e.own.judgment === 'Imprecisión' ? 'info' : 'bad'}` }, e.own.judgment), ' ',
+      h('span', { class: 'muted small' }, e.themes.filter((t) => SELF_QUESTIONS[t]).map(themeName).join(', ')),
+      progress.puzzles[e.id] ? h('span', { class: 'muted small' }, ' · guardado') : null, ' ',
+      h('button', { class: 'link', onClick: () => { closeDialogs(); loadPuzzle(e); } }, 'Practicar')))),
+  );
 }
 
 // ------------------------------------------------- ráfagas de fluidez
