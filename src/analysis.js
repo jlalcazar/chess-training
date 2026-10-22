@@ -376,6 +376,72 @@ export function isEndgame(chess) {
   return m.queens === 0 || (m.nonPawn.w <= 13 && m.nonPawn.b <= 13);
 }
 
+// --------------------------------------- ¿Qué ha cambiado con la jugada?
+
+/** Casillas con pieza que ataca la pieza de `sq` (según chess.attackers). */
+function attackedBy(chess, sq) {
+  const p = chess.get(sq);
+  if (!p) return [];
+  return allPieces(chess).filter((x) => x.square !== sq && chess.attackers(x.square, p.color).includes(sq)).map((x) => x.square);
+}
+
+/**
+ * Qué cambió con la última jugada (la del rival): qué ataca ahora la pieza
+ * que se movió, qué dejó de defender, qué líneas abrió al irse (ataques a la
+ * descubierta, de cualquiera de los dos bandos) y qué líneas cortó al llegar.
+ */
+export function lastMoveDiff(fenBefore, fen, lastMove) {
+  const before = load(fenBefore);
+  const after = load(fen);
+  if (!before || !after || !lastMove) return null;
+  const { from, to } = lastMove;
+  const moved = after.get(to);
+  if (!moved) return null;
+  const mover = moved.color;
+  const victim = other(mover);
+  const piece = (chess, sq) => ({ ...chess.get(sq), square: sq });
+  const captured = before.get(to) && before.get(to).color !== mover ? piece(before, to) : null;
+
+  // Ataca ahora (piezas del otro bando que antes no atacaba desde `from`).
+  const nowAttacked = attackedBy(after, to).filter((sq) => after.get(sq).color === victim);
+  const wasAttacked = new Set(attackedBy(before, from));
+  // `wins`: capturarla ganaría material en el cambio (si no, es un ataque sin peligro inmediato).
+  const attacks = nowAttacked.filter((sq) => !wasAttacked.has(sq)).map((sq) => ({ ...piece(after, sq), wins: after.get(sq).type === 'k' || see(after, sq, mover) > 0 }));
+
+  // Dejó de defender: piezas propias que defendía desde `from` y ya no desde `to`.
+  const defendedBefore = attackedBy(before, from).filter((sq) => before.get(sq).color === mover);
+  const defendsNow = new Set(attackedBy(after, to));
+  const undefended = defendedBefore
+    .filter((sq) => !defendsNow.has(sq) && after.get(sq)?.color === mover)
+    .map((sq) => ({ ...piece(after, sq), stillDefended: after.attackers(sq, mover).length > 0 }));
+
+  // Líneas abiertas y cortadas: piezas largas (de los dos bandos) que no se han movido.
+  const opened = [];
+  const blocked = [];
+  for (const s of allPieces(after)) {
+    if (!['b', 'r', 'q'].includes(s.type) || s.square === to) continue;
+    const prev = before.get(s.square);
+    if (!prev || prev.type !== s.type || prev.color !== s.color) continue;
+    const nowT = new Set(attackedBy(after, s.square).filter((sq) => after.get(sq).color !== s.color));
+    const prevT = new Set(attackedBy(before, s.square).filter((sq) => before.get(sq)?.color !== s.color && sq !== to));
+    for (const sq of nowT) if (!prevT.has(sq) && sq !== to && between(s.square, sq).includes(from)) opened.push({ by: piece(after, s.square), target: piece(after, sq) });
+    for (const sq of prevT) if (!nowT.has(sq) && after.get(sq) && between(s.square, sq).includes(to)) blocked.push({ by: piece(after, s.square), target: piece(after, sq) });
+  }
+  return { piece: { ...moved, square: to }, from, to, captured, check: after.inCheck(), attacks, undefended, opened, blocked };
+}
+
+/** Casillas estrictamente entre dos casillas en línea recta (vacío si no están alineadas). */
+export function between(a, b) {
+  const [fa, ra] = coords(a);
+  const [fb, rb] = coords(b);
+  const df = Math.sign(fb - fa);
+  const dr = Math.sign(rb - ra);
+  if (!(fa === fb || ra === rb || Math.abs(fb - fa) === Math.abs(rb - ra))) return [];
+  const out = [];
+  for (let f = fa + df, r = ra + dr; f !== fb || r !== rb; f += df, r += dr) out.push(toSquare(f, r));
+  return out;
+}
+
 // ------------------------------------------ Mapa de casillas y rutas
 
 const relRank = (sq, color) => (color === 'w' ? Number(sq[1]) : 9 - Number(sq[1]));

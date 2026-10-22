@@ -265,6 +265,58 @@ export function answerQuestion(id, fen, hero) {
 }
 
 /**
+ * Hallazgos del paso "¿Qué ha cambiado?" a partir de lastMoveDiff: lo que el
+ * jugador tendría que señalar (la pieza atacada, la que quedó sin defensa, el
+ * objetivo de la línea abierta o cortada).
+ */
+export function changeFindings(diff, hero) {
+  if (!diff) return [];
+  const out = [];
+  const name = (p) => pieceLabel(p);
+  const mine = (p) => p.color === hero;
+  const moved = diff.piece;
+  if (diff.captured) out.push(finding(`Ha capturado ${name(diff.captured)}`, [diff.to], 'info'));
+  for (const p of diff.attacks) {
+    const what = p.type === 'k' ? 'a tu rey (jaque)' : `${mine(p) ? 'tu' : 'la'} ${name(p)}${p.wins ? '' : ' (bien defendida: no se pierde en el cambio)'}`;
+    out.push(finding(`${PIECE_NAMES[moved.type][0].toUpperCase()}${PIECE_NAMES[moved.type].slice(1)} de ${moved.square} ataca ahora ${what}`, [moved.square, p.square], mine(p) && p.wins ? 'bad' : 'info', { targets: [p.square] }));
+  }
+  for (const p of diff.undefended) {
+    out.push(finding(`Ha dejado de defender ${name(p)}${p.stillDefended ? ' (aún la defiende otra pieza)' : ': queda sin defensa'}`, [diff.from, p.square], p.stillDefended ? 'info' : 'good', { targets: [p.square] }));
+  }
+  for (const o of diff.opened) {
+    out.push(finding(`Al irse de ${diff.from} abre la línea de ${name(o.by)} hacia ${name(o.target)}${mine(o.by) ? ' (a tu favor)' : ' (ataque a la descubierta)'}`, [o.by.square, diff.from, o.target.square], mine(o.by) ? 'good' : 'bad', { targets: [o.target.square] }));
+  }
+  for (const b of diff.blocked) {
+    out.push(finding(`En ${diff.to} corta la línea de ${name(b.by)} hacia ${name(b.target)}`, [b.by.square, diff.to, b.target.square], mine(b.by) ? 'bad' : 'good', { targets: [b.target.square] }));
+  }
+  return out;
+}
+
+/**
+ * Enlaza lo que cambió con la jugada clave: "la jugada del rival dejó sin
+ * defensa el alfil de e7" si la clave lo aprovecha. Devuelve una frase o null.
+ */
+export function changeLink(diff, fen, keyUci) {
+  if (!diff || !keyUci) return null;
+  const chess = load(fen);
+  const to = keyUci.slice(2, 4);
+  let key;
+  try {
+    key = chess.move({ from: keyUci.slice(0, 2), to, promotion: keyUci[4] });
+  } catch {
+    return null;
+  }
+  const loose = diff.undefended.find((p) => !p.stillDefended && (p.square === to || chess.attackers(p.square, key.color).includes(to)));
+  if (loose) return `La jugada del rival dejó sin defensa ${pieceLabel(loose)}, y la clave ${key.san} lo aprovecha.`;
+  if (to === diff.to) return `La clave ${key.san} captura la pieza que acaba de mover el rival.`;
+  const opened = diff.opened.find((o) => o.by.color === key.color && (o.by.square === key.from || o.target.square === to));
+  if (opened) return `Al mover, el rival abrió la línea de ${pieceLabel(opened.by)}: la clave ${key.san} la usa.`;
+  if (diff.blocked.some((b) => b.target.square === to || b.by.square === to)) return `La pieza del rival se interpuso en una línea, y la clave ${key.san} actúa sobre ella.`;
+  if (chess.attackers(diff.to, key.color).includes(to) && !chess.isCheckmate()) return `La clave ${key.san} ataca la pieza que acaba de mover el rival.`;
+  return null;
+}
+
+/**
  * ¿Es el rey de `color` una debilidad? En el centro solo si quedan damas, ya
  * no puede enrocar y tiene una columna abierta o semiabierta al lado (antes
  * bastaba con estar en la columna d o e, y casi siempre salía SÍ). Fuera del

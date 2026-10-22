@@ -2,9 +2,11 @@ import './styles.css';
 import { Chess } from 'chess.js';
 import { Board } from './board.js';
 import { $, h, storage, uciToMove } from './dom.js';
-import { BLIND_SPOTS, COLOR_NAMES, PIECE_NAMES, blindSpots, describeIdea, evaluateMove, explainLine, findForcingIdea, forcingSweep, load, narratePly, withTurn } from './analysis.js';
+import { BLIND_SPOTS, COLOR_NAMES, PIECE_NAMES, blindSpots, describeIdea, evaluateMove, explainLine, findForcingIdea, forcingSweep, lastMoveDiff, load, narratePly, withTurn } from './analysis.js';
 import { DEFAULT_DEPTH, ENGINE_SOURCES, StockfishEngine, describeAdvantage, engineMove, evaluateMoves, evaluatePosition, formatScore, pvToSan, toCp, verdict, winChance } from './engine.js';
 import { emptyStats, recordExercise, summarize } from './stats.js';
+import { CONFIDENCE, GLANCE_CASES, GLANCE_SECONDS, glanceCase } from './intuition.js';
+import { PHASE_NAMES, fixation, keyFirstSeen, phaseDurations } from './timeline.js';
 import { SRS_INTERVALS, dueReviews, dueText, emptyProgress, failCount, learnedPuzzles, legacyCount, recordAttempt, srsChange, themeSummary, upcomingReviews } from './progress.js';
 import { DIFFICULTIES, THEMES, THEME_HELP, fetchDailyPuzzle, fetchNextPuzzle, fetchPuzzleById, themeName } from './lichess.js';
 import {
@@ -16,7 +18,10 @@ import {
   NO_TIME_STEPS,
   TACTICAL_QUESTIONS,
   answerQuestion,
+  changeFindings,
+  changeLink,
   questionPlan,
+  scorePicks,
 } from './method.js';
 
 // ----------------------------------------------------------------- utilidades
@@ -30,7 +35,22 @@ function log(...args) {
 
 // ---------------------------------------------------------------------- estado
 
-const settings = { level: 'casual', angle: 'mix', difficulty: 'normal', mode: 'tiempo', breathing: true, engineOn: false, engineSource: 'stockfish', ...storage.get('settings', {}) };
+// Preferencias: las antiguas y las nuevas opciones de entrenamiento (todas se
+// guardan en `settings`; los valores guardados antes siguen valiendo).
+const SETTING_DEFAULTS = {
+  level: 'casual', angle: 'mix', difficulty: 'normal', mode: 'tiempo', breathing: true, engineOn: false, engineSource: 'stockfish',
+  whatChanged: true, // paso "¿Qué ha cambiado?"
+  glance: true, // golpe de vista de 10 s
+  pointAnswers: false, // responder señalando en el tablero
+  predictReply: 'auto', // predecir la respuesta del rival: auto = desde Intermedio
+  calcStep: false, // paso "Calcular" siempre (si no, con un botón en Decisión)
+  lineSweep: true, // barrido rápido antes de cada jugada de la línea
+  safetyCheck: true, // "¿Qué permite mi jugada?" antes de jugar
+  scaffold: true, // ayuda que se retira por pregunta
+  blindArrows: 'auto', // flechas de la línea a ciegas: auto = ocultas en Avanzado y Experto
+  lichessUser: '',
+};
+const settings = { ...SETTING_DEFAULTS, ...storage.get('settings', {}) };
 let state = null;
 let timer = null;
 
@@ -48,7 +68,9 @@ function newState(puzzle) {
   return {
     puzzle,
     plan,
-    step: settings.mode === 'tiempo' ? (settings.breathing ? 'calma' : 'candidatas') : 'intuicion',
+    mode: settings.mode,
+    flow: flowFor(settings.mode, puzzle),
+    step: null,
     candidates: [],
     addingCandidate: false, // en Decisión: el próximo movimiento en el tablero se apunta, no se juega
     intuition: null,
@@ -63,8 +85,42 @@ function newState(puzzle) {
     hint: 0, // nivel de pista para la jugada actual (0-3)
     hintsUsed: 0,
     startedAt: Date.now(),
+    timeline: [], // mapa del proceso: se registra en silencio
   };
 }
+
+/** Apunta un evento en la línea de tiempo del ejercicio (fases, candidatas, respuestas, pistas, jugadas). */
+function track(type, data = {}) {
+  if (!state?.timeline) return;
+  state.timeline.push({ t: Date.now() - state.startedAt, type, ...data });
+}
+
+/** Pasos del ejercicio según el modo y las opciones (se fijan al empezar). */
+function flowFor(mode, puzzle) {
+  if (mode !== 'tiempo') return ['intuicion', 'comprobacion', 'resolver', 'resumen'];
+  return [
+    settings.breathing && 'calma',
+    settings.whatChanged && puzzle.fenBefore && puzzle.lastMove && 'cambios',
+    settings.glance && 'vistazo',
+    'candidatas', 'tactica', 'estrategia',
+    settings.calcStep && 'calculo',
+    'decision', 'resolver', 'resumen',
+  ].filter(Boolean);
+}
+
+const STEP_LABELS = { calma: 'Calma', cambios: '¿Qué cambió?', vistazo: 'Golpe de vista', candidatas: 'Candidatas', tactica: 'Táctica', estrategia: 'Estrategia', calculo: 'Calcular', decision: 'Decisión', permite: '¿Qué permite?', resolver: 'Jugar', resumen: 'Resumen', intuicion: 'Intuición', comprobacion: 'Comprobar' };
+
+/** El paso que sigue a `step` en el flujo de este ejercicio. */
+function nextStep(step) {
+  const i = state.flow.indexOf(step);
+  return state.flow[i + 1] ?? 'decision';
+}
+
+/** Número del paso para los títulos ("3. Preguntas tácticas"). */
+const stepNo = (step) => state.flow.indexOf(step) + 1;
+
+/** Modo del ejercicio actual (el de las opciones si no hay ejercicio). */
+const mode = () => state?.mode ?? settings.mode;
 
 // ------------------------------------------------------------------- arranque
 
@@ -107,6 +163,38 @@ function renderSettings() {
     h('button', { id: 'review-button', class: due ? 'review-due' : '', onClick: openReview, title: 'Ejercicios fallados para repetir de forma espaciada' }, due ? `Repaso (${due})` : 'Repaso'),
     h('button', { onClick: openThemes, title: 'Resueltos y no resueltos por tema' }, 'Temas'),
     h('button', { onClick: openStats }, 'Estadísticas'),
+    h('button', { onClick: openOptions, title: 'Opciones de entrenamiento: pasos y ayudas que puedes activar o quitar' }, 'Opciones'),
+  );
+}
+
+/** Opciones de entrenamiento (se guardan en `settings`; se aplican al empezar el siguiente ejercicio). */
+const OPTIONS = [
+  { key: 'whatChanged', label: '¿Qué ha cambiado con la jugada del rival?', help: 'Paso corto tras la calma: señala qué ataca, qué dejó de defender y qué líneas abrió o cortó la última jugada.' },
+  { key: 'glance', label: 'Golpe de vista (10 s)', help: 'La primera jugada que te salga, con tu seguridad. Mide tu intuición.' },
+  { key: 'pointAnswers', label: 'Responder señalando en el tablero', help: 'En lugar de Sí/No: toca las casillas (de los dos colores) o juega el mate. Así decir siempre "sí" no puntúa.' },
+  { key: 'predictReply', label: 'Predecir la respuesta del rival', help: 'Tras cada jugada correcta, juegas tú la respuesta que esperas del rival.', options: { auto: 'Desde Intermedio', on: 'Siempre', off: 'Nunca' } },
+  { key: 'calcStep', label: 'Paso «Calcular» siempre', help: 'Compara dos candidatas con líneas a ciegas antes de decidir. Si está apagado, tienes un botón en Decisión.' },
+  { key: 'lineSweep', label: 'Barrido rápido en cada jugada de la línea', help: 'Antes de cada jugada tuya en la línea: cuántos jaques, capturas y amenazas hay, sin decir cuáles.' },
+  { key: 'safetyCheck', label: '¿Qué permite mi jugada? (antes de jugar)', help: 'Juegas tú la respuesta que más te preocupa y la app te dice qué no miraste.' },
+  { key: 'scaffold', label: 'Ayuda que se retira', help: 'Las preguntas que dominas pasan a un chequeo rápido de 30 s; si fallan, vuelven a ser guiadas.' },
+  { key: 'blindArrows', label: 'Flechas en la línea a ciegas', help: 'Dibujar las jugadas que introduces o tenerlas solo en la cabeza.', options: { auto: 'Ocultas en Avanzado y Experto', on: 'Siempre visibles', off: 'Siempre ocultas' } },
+];
+
+function openOptions() {
+  const row = (o) => {
+    const control = o.options
+      ? h('select', { 'aria-label': o.label, onChange: (e) => { settings[o.key] = e.target.value; saveSettings(); } },
+          Object.entries(o.options).map(([value, label]) => h('option', { value, selected: String(settings[o.key]) === value }, label)))
+      : h('input', { type: 'checkbox', checked: Boolean(settings[o.key]), onChange: (e) => { settings[o.key] = e.target.checked; saveSettings(); } });
+    return h('li', { class: 'option-row' },
+      o.options ? h('label', {}, h('strong', {}, o.label), ' ', control) : h('label', { class: 'check' }, control, ' ', h('strong', {}, o.label)),
+      h('div', { class: 'muted small' }, o.help));
+  };
+  openDialog('options-dialog', 'Opciones de entrenamiento',
+    h('p', { class: 'muted small' }, 'Todo es opcional: el proceso de siempre sigue igual. Los cambios se aplican desde el siguiente ejercicio.'),
+    h('ul', { class: 'options' }, OPTIONS.map(row)),
+    h('h3', {}, 'Atajos de teclado'),
+    h('p', { class: 'small' }, 'S y N: responder · ?: pista · Intro: continuar · 1-5: elegir candidata · P: jugar la elegida · flechas: navegar en el resumen.'),
   );
 }
 
@@ -131,6 +219,9 @@ async function loadPuzzle(source, { srs = false } = {}) {
     if (request !== loadSeq) return;
     log('puzzle', puzzle);
     state = newState(puzzle);
+    state.step = state.flow[0];
+    state.stepAt = Date.now();
+    track('phase', { step: state.step });
     state.srsSession = srs;
     // Muestra la posición anterior y luego la jugada del rival, como en Lichess.
     board.setInteractive(false);
@@ -159,6 +250,8 @@ async function loadPuzzle(source, { srs = false } = {}) {
 function go(step) {
   stopTimer();
   state.step = step;
+  state.stepAt = Date.now();
+  track('phase', { step });
   state.questionIndex = 0;
   state.feedback = null;
   log('step', step);
@@ -178,13 +271,13 @@ function render() {
     ),
     nextButton(done),
   );
-  const steps = settings.mode === 'tiempo'
-    ? [['calma', 'Calma'], ['candidatas', 'Candidatas'], ['tactica', 'Táctica'], ['estrategia', state.plan.endgame ? 'Final' : 'Estrategia'], ['decision', 'Decisión'], ['resolver', 'Jugar'], ['resumen', 'Resumen']]
-    : [['intuicion', 'Intuición'], ['comprobacion', 'Comprobar'], ['resolver', 'Jugar'], ['resumen', 'Resumen']];
-  const idx = steps.findIndex(([id]) => id === state.step);
+  const steps = state.flow.map((id) => [id, id === 'estrategia' && state.plan.endgame ? 'Final' : STEP_LABELS[id]]);
+  // "¿Qué permite?" y el remate son pasos intermedios: se marcan sobre el paso más cercano.
+  const shown = { permite: 'resolver', remate: 'resumen' }[state.step] ?? state.step;
+  const idx = steps.findIndex(([id]) => id === shown);
   const stepper = h('ol', { class: 'stepper' }, steps.map(([id, label], i) => h('li', { class: i < idx ? 'done' : i === idx ? 'current' : '' }, label)));
 
-  const views = { calma, candidatas, tactica, estrategia, decision, resolver, resumen, intuicion, comprobacion, remate };
+  const views = { calma, cambios, vistazo, candidatas, tactica, estrategia, decision, resolver, resumen, intuicion, comprobacion, remate };
   panel.replaceChildren(header, stepper, views[state.step]());
   if (DEBUG) panel.append(h('details', { class: 'debug' }, h('summary', {}, 'Depuración'), h('pre', {}, JSON.stringify({ ...state, plan: undefined }, null, 2))));
   syncBoard();
@@ -197,6 +290,9 @@ function nextButton(done) {
   }
   return h('button', { class: done ? 'primary next' : 'next', title: done ? '' : 'Pasa a otro ejercicio sin terminar este', onClick: () => loadPuzzle() }, 'Siguiente ejercicio →');
 }
+
+// Pasos que gestionan sus propias marcas en el tablero.
+const MARK_STEPS = ['tactica', 'estrategia', 'cambios'];
 
 function syncBoard() {
   const { step } = state;
@@ -211,19 +307,19 @@ function syncBoard() {
     return;
   }
   if (step !== 'resumen') board.setPosition(state.playFen, { orientation: state.puzzle.heroColor, lastMove: state.lastMove });
-  board.setInteractive(['candidatas', 'intuicion', 'decision', 'resolver'].includes(step) && !(step === 'resolver' && (state.revealed || state.ply >= state.puzzle.solution.length)));
+  board.setInteractive((['candidatas', 'intuicion', 'decision', 'resolver'].includes(step) || (step === 'vistazo' && !state.glance)) && !(step === 'resolver' && (state.revealed || state.ply >= state.puzzle.solution.length)));
   board.setPickMode(Boolean(state.pointing));
   if (step === 'candidatas' || step === 'decision') {
     board.setArrows(state.candidates.map((c) => ({ from: c.move.from, to: c.move.to, tone: 'candidate' })));
   } else if (step === 'comprobacion' && state.intuition) {
     board.setArrows([{ from: state.intuition.move.from, to: state.intuition.move.to, tone: 'candidate' }]);
-  } else if (step !== 'tactica' && step !== 'estrategia') {
+  } else if (!MARK_STEPS.includes(step)) {
     board.setArrows([]);
   }
   if (step === 'resolver' && state.hint >= 2) {
     const expected = state.puzzle.solution[state.ply];
     board.setMarks(state.hint >= 3 ? { [expected.slice(0, 2)]: 'info', [expected.slice(2, 4)]: 'good' } : { [expected.slice(0, 2)]: 'info' });
-  } else if (!['tactica', 'estrategia'].includes(step)) board.setMarks({});
+  } else if (!MARK_STEPS.includes(step) && !state.pointing) board.setMarks({});
   if (step === 'resumen' && state.review) {
     const pos = state.review.positions[state.review.index];
     board.setPosition(pos.fen, { lastMove: pos.lastMove });
@@ -246,6 +342,8 @@ function clickMode() {
       return { kind: 'candidate', text: 'Clic: apuntar candidata (no se juega)' };
     case 'intuicion':
       return { kind: 'candidate', text: 'Clic: marcar tu jugada (aún no se juega)' };
+    case 'vistazo':
+      return state.glance ? { kind: 'none', text: 'El tablero está quieto' } : { kind: 'candidate', text: 'Clic: tu primera jugada (no se juega)' };
     case 'decision':
       return state.addingCandidate ? { kind: 'candidate', text: 'Clic: apuntar candidata (no se juega)' } : { kind: 'move', text: 'Clic: jugar' };
     case 'comprobacion':
@@ -469,16 +567,187 @@ function calma() {
     phase.textContent = inhaling ? 'Inhala' : 'Exhala';
     circle.className = `breath-circle ${inhaling ? 'inhale' : 'exhale'}`;
     counter.textContent = `${left} s`;
-    if (left <= 0) go('candidatas');
+    if (left <= 0) go(nextStep('calma'));
   }, 1000);
   return h(
     'section',
     {},
-    h('h2', {}, '1. Respira y mira la posición sin pensar'),
+    h('h2', {}, `${stepNo('calma')}. Respira y mira la posición sin pensar`),
     h('p', {}, `Inhala ${BREATHING.inhale} segundos, exhala ${BREATHING.exhale}. No calcules: deja que la intuición trabaje. Así evitas jugar "al toque", que es donde nacen muchos errores.`),
     h('div', { class: 'breath' }, circle, phase, counter),
     h('label', { class: 'block' }, '¿Qué te llama la atención? (opcional)', h('textarea', { rows: 2, onInput: (e) => (state.firstImpression = e.target.value) }, state.firstImpression ?? '')),
-    h('button', { onClick: () => go('candidatas') }, 'Estoy listo/a'),
+    h('button', { onClick: () => go(nextStep('calma')) }, 'Estoy listo/a'),
+  );
+}
+
+// ------------------------------------------- señalar casillas en el tablero
+
+/** Empieza una respuesta "señalando": cada clic marca o desmarca una casilla. */
+function beginPointing() {
+  state.pointing = {
+    picks: [],
+    startedAt: Date.now(),
+    onPick(sq) {
+      const p = state.pointing;
+      const i = p.picks.indexOf(sq);
+      if (i >= 0) p.picks.splice(i, 1);
+      else p.picks.push(sq);
+      board.setMarks(Object.fromEntries(p.picks.map((x) => [x, 'pick'])));
+      const counter = document.getElementById('pick-count');
+      if (counter) counter.textContent = pickCountText(p.picks.length);
+    },
+  };
+  board.setMarks({});
+  board.setArrows([]);
+}
+
+const pickCountText = (n) => (n ? `${n} ${n === 1 ? 'casilla señalada' : 'casillas señaladas'}` : 'Ninguna casilla señalada');
+
+/** Termina la respuesta y la corrige contra los hallazgos; deja las marcas de colores. */
+function endPointing(findings) {
+  const p = state.pointing;
+  state.pointing = null;
+  const result = { ...scorePicks(findings, p?.picks ?? []), picks: [...(p?.picks ?? [])], ms: Date.now() - (p?.startedAt ?? Date.now()) };
+  showPointingResult(findings, result);
+  return result;
+}
+
+/** Verde: encontrado; rojo: lo que se escapó; gris: falsas alarmas. */
+function showPointingResult(findings, result) {
+  const marks = {};
+  for (const f of result.missed) for (const sq of f.targets) marks[sq] ??= 'missed';
+  for (const f of result.found) for (const sq of f.targets) if (result.picks.includes(sq) || f.match === 'all') marks[sq] = 'found';
+  for (const sq of result.falseAlarms) marks[sq] = 'false';
+  board.setMarks(marks);
+}
+
+/** Frase del resultado: "Has encontrado 3 de 4 en 9 s". */
+function pointingSummary(result) {
+  const secs = Math.round(result.ms / 1000);
+  const fa = result.falseAlarms.length ? ` · ${result.falseAlarms.length} ${result.falseAlarms.length === 1 ? 'falsa alarma' : 'falsas alarmas'}` : '';
+  if (!result.required) return result.falseAlarms.length ? `No había nada que señalar${fa} (${secs} s).` : `Correcto: no había nada (${secs} s).`;
+  return `Has encontrado ${result.found.length} de ${result.required} en ${secs} s${fa}.`;
+}
+
+/** Botones del modo señalar: contador, "Listo", "No hay nada" y borrar. */
+function pointingControls(onDone) {
+  const n = state.pointing?.picks.length ?? 0;
+  return h('div', { class: 'pointing' },
+    h('p', { class: 'small' }, h('span', { id: 'pick-count' }, pickCountText(n)), ' · toca otra vez una casilla para quitarla.'),
+    h('div', { class: 'actions' },
+      h('button', { class: 'primary', 'data-key': 'enter', onClick: () => onDone(false) }, 'Listo'),
+      h('button', { 'data-key': 'n', onClick: () => { if (state.pointing) state.pointing.picks = []; onDone(true); } }, 'No hay nada'),
+      h('button', { class: 'link', onClick: () => { if (!state.pointing) return; state.pointing.picks = []; board.setMarks({}); document.getElementById('pick-count').textContent = pickCountText(0); } }, 'Borrar'),
+    ),
+  );
+}
+
+// ------------------------------------------------ paso: ¿qué ha cambiado?
+
+function cambios() {
+  const { puzzle } = state;
+  const hero = puzzle.heroColor;
+  state.change ??= (() => {
+    const diff = lastMoveDiff(puzzle.fenBefore, puzzle.fen, puzzle.lastMove);
+    return { diff, findings: changeFindings(diff, hero), result: null };
+  })();
+  const ch = state.change;
+  const next = () => {
+    state.pointing = null;
+    board.setMarks({});
+    go(nextStep('cambios'));
+  };
+  const children = [
+    h('h2', {}, `${stepNo('cambios')}. ¿Qué ha cambiado con ${puzzle.lastMove.san}?`),
+    h('p', {}, 'Antes de buscar jugadas, mira la jugada del rival. Señala en el tablero qué ataca ahora la pieza que se movió, qué dejó de defender, qué línea abrió al irse (descubierta) y qué línea cortó al llegar.'),
+    h('div', { class: 'actions' },
+      h('button', {
+        title: 'Mantén pulsado para ver la posición antes de la jugada del rival',
+        onPointerdown: () => board.setPosition(puzzle.fenBefore, { orientation: hero }),
+        onPointerup: () => syncBoard(),
+        onPointerleave: () => syncBoard(),
+      }, 'Ver la posición anterior (mantén pulsado)'),
+    ),
+  ];
+  if (!ch.result) {
+    if (!state.pointing) beginPointing();
+    children.push(
+      pointingControls(() => {
+        ch.result = endPointing(ch.findings);
+        log('cambios', ch.result);
+        render();
+        showPointingResult(ch.findings, ch.result);
+      }),
+      h('div', { class: 'actions' }, h('button', { class: 'link', onClick: next }, 'Saltar este paso')),
+    );
+  } else {
+    children.push(
+      h('p', { class: ch.result.correct ? 'ok' : 'ko' }, pointingSummary(ch.result)),
+      ch.findings.length ? findingsList(ch.findings) : h('p', { class: 'muted' }, 'La jugada no cambia ataques ni defensas a simple vista.'),
+      h('p', { class: 'muted small' }, 'Verde: lo que encontraste. Rojo: lo que se te escapó. Gris: casillas que no tenían que ver.'),
+      h('div', { class: 'actions' }, h('button', { class: 'primary', 'data-key': 'enter', onClick: next }, 'Seguir')),
+    );
+  }
+  return h('section', {}, ...children);
+}
+
+// ------------------------------------------------- paso: golpe de vista
+
+function vistazo() {
+  stopTimer();
+  const g = state.glance;
+  const next = () => go(nextStep('vistazo'));
+  if (!g) {
+    let left = GLANCE_SECONDS;
+    const counter = h('div', { class: 'countdown' }, String(left));
+    timer = setInterval(() => {
+      left--;
+      counter.textContent = String(Math.max(left, 0));
+      counter.classList.toggle('urgent', left <= 3);
+      if (left <= 0) {
+        state.glance = { none: true };
+        render();
+      }
+    }, 1000);
+    return h('section', {},
+      h('h2', {}, `${stepNo('vistazo')}. Golpe de vista: ${GLANCE_SECONDS} segundos`),
+      h('p', {}, 'Mueve en el tablero la primera jugada que te salga, sin pensar. No se juega: entra como tu candidata 1 ("intuición") y al final verás si tu intuición acertó.'),
+      counter,
+      h('div', { class: 'actions' }, h('button', { class: 'link', onClick: () => { state.glance = { none: true, skipped: true }; next(); } }, 'Saltar')),
+    );
+  }
+  if (g.none) {
+    return h('section', {},
+      h('h2', {}, `${stepNo('vistazo')}. Golpe de vista`),
+      h('p', {}, 'No ha salido ninguna jugada: no pasa nada, a veces la posición pide pensar.'),
+      h('div', { class: 'actions' }, h('button', { class: 'primary', 'data-key': 'enter', onClick: next }, 'Seguir')),
+    );
+  }
+  const pick = (confidence) => {
+    g.confidence = confidence;
+    g.ms = g.ms ?? 0;
+    // Entra como candidata 1, etiquetada como intuición.
+    const ev = evaluateWithIdea(state.puzzle.fen, g.move);
+    if (ev && !state.candidates.some((c) => c.uci === ev.uci)) state.candidates.unshift({ ...ev, source: 'intuicion' });
+    track('candidate', { uci: g.uci, source: 'intuicion' });
+    next();
+  };
+  return h('section', {},
+    h('h2', {}, `${stepNo('vistazo')}. Golpe de vista: ${g.san}`),
+    h('p', {}, '¿Qué seguridad tienes en esta jugada? Sé sincero/a: así se mide si tu intuición está bien calibrada.'),
+    h('div', { class: 'actions' }, Object.entries(CONFIDENCE).map(([id, c], i) => h('button', { 'data-key': String(i + 1), onClick: () => pick(id) }, `${c.label} (${Math.round(c.p * 100)} %)`))),
+  );
+}
+
+/** Tarjeta del resumen: qué pasó con tu golpe de vista. */
+function glanceCard() {
+  const g = state.glance;
+  if (!g?.uci || !g.confidence) return null;
+  const kase = state.glanceCase;
+  return h('div', { class: 'glance-card' },
+    h('strong', {}, `Tu golpe de vista: ${g.san} (${CONFIDENCE[g.confidence].label.toLowerCase()})`),
+    h('ul', { class: 'cases' }, Object.entries(GLANCE_CASES).map(([id, c]) => h('li', { class: id === kase ? `current tone-${c.tone}` : '' }, h('strong', {}, c.label), id === kase ? ` · ${c.text}` : null))),
+    kase === 'otra' ? h('p', { class: 'small' }, 'Tu intuición falló y tu primera jugada tampoco fue la clave: el método no llegó a corregirla.') : null,
   );
 }
 
@@ -499,7 +768,10 @@ function evaluateWithIdea(fen, move) {
 
 function addCandidate(move) {
   const ev = evaluateWithIdea(state.puzzle.fen, withPromotion(move, 0));
-  if (ev && state.candidates.length < MAX_CANDIDATES && !state.candidates.some((c) => c.uci === ev.uci)) state.candidates.push(ev);
+  if (ev && state.candidates.length < MAX_CANDIDATES && !state.candidates.some((c) => c.uci === ev.uci)) {
+    state.candidates.push(ev);
+    track('candidate', { uci: ev.uci });
+  }
   render();
 }
 
@@ -513,10 +785,12 @@ function candidateList(removable) {
         'li',
         {},
         h('strong', {}, c.san),
+        c.source === 'intuicion' ? h('span', { class: 'muted small' }, ' (intuición)') : null,
         removable &&
           h('button', {
             class: 'link',
             onClick: () => {
+              track('removeCandidate', { uci: state.candidates[i].uci });
               state.candidates.splice(i, 1);
               render();
             },
@@ -531,7 +805,7 @@ function candidatas() {
   return h(
     'section',
     {},
-    h('h2', {}, `2. Hasta ${MAX_CANDIDATES} jugadas candidatas, sin calcular`),
+    h('h2', {}, `${stepNo('candidatas')}. Hasta ${MAX_CANDIDATES} jugadas candidatas, sin calcular`),
     h('p', {}, 'Mueve en el tablero las jugadas que se te ocurran (no se juegan, solo se apuntan). No entres en variantes todavía: muchos cálculos acaban en líneas que nunca aparecen.'),
     candidateList(true),
     sweep ? sweepView(sweep) : null,
@@ -598,6 +872,7 @@ function questionView(questions, title, intro, onDone) {
     const pick = (user) => {
       const result = answerQuestion(q.id, state.puzzle.fen, state.puzzle.heroColor);
       state.answers[q.id] = { user, result };
+      track('answer', { q: q.id, user });
       log('question', q.id, { user, result });
       render();
       showFindings(result.findings);
@@ -653,12 +928,12 @@ function candidateReminder() {
 }
 
 function tactica() {
-  return questionView(state.plan.tactical, '3. Preguntas tácticas', `${LEVELS[settings.level].tacticalNote} Fíjate en los dos colores.`, () => queueMicrotask(() => go('estrategia')));
+  return questionView(state.plan.tactical, `${stepNo('tactica')}. Preguntas tácticas`, `${LEVELS[settings.level].tacticalNote} Fíjate en los dos colores.`, () => queueMicrotask(() => go('estrategia')));
 }
 
 function estrategia() {
   const { plan } = state;
-  const title = plan.endgame ? '4. Preguntas de finales' : '4. Preguntas estratégicas';
+  const title = `${stepNo('estrategia')}. ${plan.endgame ? 'Preguntas de finales' : 'Preguntas estratégicas'}`;
   const intro = plan.endgame ? 'Sin damas en el tablero: cambian las preguntas.' : LEVELS[settings.level].strategicNote;
   const tacticalHits = plan.tactical.filter((q) => state.answers[q.id]?.result.yes).length;
   if (!state.forceStrategy && state.questionIndex === 0 && !state.answers[plan.strategic[0]?.id] && !plan.endgame && tacticalHits >= 3) {
@@ -666,12 +941,12 @@ function estrategia() {
       h('h2', {}, title),
       h('p', {}, `Las preguntas tácticas han dado ${tacticalHits} "síes". Cuando la táctica funciona, la estrategia puede esperar.`),
       h('div', { class: 'actions' },
-        h('button', { class: 'primary', onClick: () => go('decision') }, 'Ir a decidir'),
+        h('button', { class: 'primary', onClick: () => go(nextStep('estrategia')) }, 'Ir a decidir'),
         h('button', { onClick: () => { state.forceStrategy = true; render(); } }, 'Hacer igualmente las preguntas'),
       ),
     );
   }
-  return questionView(plan.strategic, title, intro, () => queueMicrotask(() => go('decision')));
+  return questionView(plan.strategic, title, intro, () => queueMicrotask(() => go(nextStep('estrategia'))));
 }
 
 // ------------------------------------------------------------- decisión
@@ -685,14 +960,14 @@ function decision() {
         c.warnings.length ? h('ul', { class: 'warnings' }, c.warnings.map((w) => h('li', {}, `⚠ ${w}`))) : null),
       h('td', {},
         h('button', { class: 'primary', onClick: () => playDecision(c.move) }, 'Jugar'),
-        h('button', { class: 'link', onClick: () => { state.candidates.splice(i, 1); render(); } }, 'quitar'),
+        h('button', { class: 'link', onClick: () => { track('removeCandidate', { uci: c.uci }); state.candidates.splice(i, 1); render(); } }, 'quitar'),
       ),
     ),
   );
   const full = state.candidates.length >= MAX_CANDIDATES;
   const adding = state.addingCandidate;
   return h('section', {},
-    h('h2', {}, '5. Decide'),
+    h('h2', {}, `${stepNo('decision')}. Decide`),
     h('p', {}, 'La mejor jugada suele responder SÍ a varias preguntas. Compara tus candidatas y revisa los avisos (qué dejas colgado).'),
     state.candidates.length
       ? h('table', { class: 'decision' }, h('thead', {}, h('tr', {}, h('th', {}, 'Jugada'), h('th', {}, 'Síes'), h('th', {}, 'Qué consigue'), h('th', {}))), h('tbody', {}, rows))
@@ -734,7 +1009,7 @@ function intuicion() {
   }, 1000);
   const s = NO_TIME_STEPS[0];
   return h('section', {},
-    h('h2', {}, `1. ${s.text}`),
+    h('h2', {}, `${stepNo('intuicion')}. ${s.text}`),
     h('p', {}, s.hint),
     counter,
     h('p', { class: 'muted small' }, 'Marca la jugada en el tablero. Todavía no se juega: primero la comprobarás.'),
@@ -748,7 +1023,7 @@ function comprobacion() {
   const threats = answerQuestion('amenazadas', state.puzzle.fen, state.puzzle.heroColor);
   const dangers = [...mate.findings, ...threats.findings].filter((f) => f.tone === 'bad');
   return h('section', {},
-    h('h2', {}, `2. ${s.text}`),
+    h('h2', {}, `${stepNo('comprobacion')}. ${s.text}`),
     h('p', {}, s.hint),
     h('h3', {}, `Tu jugada: ${ev.san}`),
     ev.tags.length ? h('ul', {}, ev.tags.map((t) => h('li', {}, t.text))) : h('p', { class: 'muted' }, 'No da jaque, no captura y no amenaza nada concreto.'),
@@ -770,10 +1045,25 @@ function onBoardMove(move) {
   switch (state.step) {
     case 'candidatas':
       return addCandidate(move);
+    case 'vistazo': {
+      if (state.glance) return undefined;
+      const full = withPromotion(move, 0);
+      const chess = load(state.puzzle.fen);
+      let m;
+      try {
+        m = chess.move(full);
+      } catch {
+        return undefined;
+      }
+      stopTimer();
+      state.glance = { move: full, uci: m.from + m.to + (m.promotion ?? ''), san: m.san, mates: chess.isCheckmate(), ms: Date.now() - state.stepAt };
+      return render();
+    }
     case 'intuicion': {
       const ev = evaluateWithIdea(state.puzzle.fen, withPromotion(move, 0));
       if (!ev) return;
       state.intuition = ev;
+      track('candidate', { uci: ev.uci, source: 'intuicion' });
       return go('comprobacion');
     }
     case 'decision':
@@ -818,6 +1108,8 @@ function playUserMove(move) {
   // Lichess acepta cualquier mate aunque no sea la jugada registrada.
   const correct = uci === expected || chess.isCheckmate();
   log('move', { uci, expected, correct });
+  track('move', { uci, ply: state.ply, ok: correct });
+  if (state.ply === 0) state.firstPlayed ??= uci;
   if (!correct) {
     const ev = evaluateMove(state.playFen, full);
     state.mistakes.push({ ply: state.ply, fen: state.playFen, uci, san: played.san, expected, ev });
@@ -883,7 +1175,7 @@ function revealSolution() {
 
 function resolver() {
   const { feedback } = state;
-  const children = [h('h2', {}, settings.mode === 'tiempo' ? '6. Juega tu decisión' : '3. Juega')];
+  const children = [h('h2', {}, `${stepNo('resolver')}. ${mode() === 'tiempo' ? 'Juega tu decisión' : 'Juega'}`)];
   if (!feedback) children.push(h('p', {}, 'Mueve en el tablero. El rival responderá automáticamente.'));
   else if (feedback.type === 'ok') children.push(h('p', { class: 'ok' }, `✔ ${feedback.san} es correcta.`));
   else if (feedback.type === 'reply') children.push(h('p', {}, `El rival responde ${feedback.san}. Tu turno: vuelve a hacerte las preguntas tácticas, sobre todo "¿hay mate?".`));
@@ -912,6 +1204,7 @@ const QUESTION_BY_ID = Object.fromEntries(TACTICAL_QUESTIONS.map((q) => [q.id, q
 function nextHint() {
   state.hint++;
   state.hintsUsed++;
+  track('hint', { level: state.hint });
   saveProgress(false);
   render();
 }
@@ -940,21 +1233,28 @@ function finish(solved) {
   // Resuelto (para temas y repaso) = sin errores, sin pistas y sin ver la solución.
   state.success = state.solved && state.hintsUsed === 0;
   const history = storage.get('history', []);
-  history.unshift({ id: puzzle.id, rating: puzzle.rating, solved: state.solved, clean: state.success, mistakes: state.mistakes.length, level: settings.level, mode: settings.mode, date: new Date().toISOString() });
+  history.unshift({ id: puzzle.id, rating: puzzle.rating, solved: state.solved, clean: state.success, mistakes: state.mistakes.length, level: settings.level, mode: mode(), date: new Date().toISOString() });
   storage.set('history', history.slice(0, 200));
   // Estadísticas por pregunta: qué preguntas señalaban la jugada clave.
   const key = evaluateWithIdea(puzzle.fen, uciToMove(puzzle.solution[0]));
   const keyUci = key?.uci;
-  const tried = settings.mode === 'tiempo' ? state.candidates.map((c) => c.uci) : [state.intuition?.uci].filter(Boolean);
+  const tried = mode() === 'tiempo' ? state.candidates.map((c) => c.uci) : [state.intuition?.uci].filter(Boolean);
   state.keyInCandidates = tried.includes(keyUci);
   state.blind = blindSpots(puzzle.fen, puzzle.solution[0], tried);
+  // Golpe de vista: ¿acertó? ¿lo jugaste o lo cambiaste?
+  const g = state.glance;
+  state.glanceCase = g?.uci ? glanceCase({ glance: g.uci, played: state.firstPlayed, key: keyUci, glanceMates: g.mates }) : null;
+  state.endedAt = Date.now() - state.startedAt;
+  state.keySeen = keyFirstSeen(state.timeline, keyUci);
   storage.set('stats', recordExercise(storage.get('stats', emptyStats()), {
     answers: state.answers,
     notes: state.notes,
     keyQuestions: key ? [...new Set(key.tags.map((t) => t.q))] : [],
-    keyInCandidates: settings.mode === 'tiempo' ? state.keyInCandidates : null,
+    keyInCandidates: mode() === 'tiempo' ? state.keyInCandidates : null,
     blind: state.blind,
     hintsUsed: state.hintsUsed,
+    glance: g?.confidence ? { confidence: g.confidence, correct: g.uci === keyUci || g.mates, kase: state.glanceCase } : null,
+    keySource: state.keySeen.where,
   }));
   saveProgress(state.success);
   state.review = buildReview(puzzle);
@@ -1041,7 +1341,9 @@ function resumen() {
     h('p', {}, h('strong', {}, `Clave ${key.san}: `), key.tags.length ? key.tags.map((t) => t.text).join('; ') : 'jugada tranquila: no da jaque ni captura; aquí cuentan las preguntas estratégicas.'),
     lineView(),
     themesView(),
-    settings.mode === 'tiempo'
+    glanceCard(),
+    processPanel(),
+    mode() === 'tiempo'
       ? h('p', { class: solutionInCandidates ? 'ok' : 'ko' }, solutionInCandidates ? 'La jugada clave estaba entre tus candidatas. La técnica de candidatas funciona.' : 'La jugada clave no estaba entre tus candidatas. Repasa: ¿qué pregunta te habría llevado a ella?')
       : h('p', { class: state.intuition?.uci === key.uci ? 'ok' : 'ko' }, state.intuition?.uci === key.uci ? 'Tu intuición acertó.' : `Tu intuición fue ${state.intuition?.san ?? '—'}. Con más tiempo, el proceso completo ayuda a corregirla.`),
     !state.keyInCandidates && state.blind?.length
@@ -1365,6 +1667,32 @@ function remate() {
       h('button', { onClick: () => startFinale(f.startFen) }, 'Empezar de nuevo'),
       h('button', { onClick: () => { state.finale = null; go('resumen'); } }, 'Volver al resumen'),
     ),
+  );
+}
+
+/** "Tu recorrido": segundos por fase, dónde apareció la clave y aviso de fijación. */
+function processPanel() {
+  const tl = state.timeline;
+  if (!tl?.length) return null;
+  const phases = phaseDurations(tl, state.endedAt ?? Date.now() - state.startedAt);
+  const total = phases.reduce((a, p) => a + p.ms, 0) || 1;
+  const seen = state.keySeen ?? { where: 'nunca' };
+  const key = evaluateMove(state.puzzle.fen, uciToMove(state.puzzle.solution[0]));
+  const where = {
+    intuicion: `La jugada clave ${key.san} te salió por intuición, a los ${seen.seconds} s.`,
+    candidatas: `La jugada clave ${key.san} apareció al apuntar candidatas, a los ${seen.seconds} s.`,
+    preguntas: `La jugada clave ${key.san} apareció a los ${seen.seconds} s${seen.after ? `, después de la pregunta «${questionText(seen.after)}»` : ''} (${PHASE_NAMES[seen.phase] ?? seen.phase}).`,
+    nunca: `La jugada clave ${key.san} no apareció en tu proceso.`,
+  }[seen.where];
+  const fix = mode() === 'tiempo' ? fixation(tl) : null;
+  const fixSan = fix ? state.candidates.find((c) => c.uci === fix.uci)?.san ?? fix.uci : null;
+  return h('div', { class: 'process' },
+    h('h3', {}, 'Tu recorrido'),
+    h('div', { class: 'phase-bar', role: 'img', 'aria-label': phases.map((p) => `${p.name} ${p.seconds} s`).join(', ') },
+      phases.map((p) => h('div', { class: `phase-seg seg-${p.step}`, style: `flex-grow: ${Math.max(p.ms / total, 0.02)}`, title: `${p.name}: ${p.seconds} s` }))),
+    h('ul', { class: 'phase-list' }, phases.map((p) => h('li', {}, h('span', { class: `dot seg-${p.step}` }), `${p.name}: ${p.seconds} s`))),
+    h('p', { class: seen.where === 'nunca' ? 'ko small' : 'small' }, where),
+    fix ? h('p', { class: 'blind small' }, `Apuntaste una sola candidata (${fixSan}) a los ${fix.seconds} s: cuando encuentres una buena jugada, busca una mejor.`) : null,
   );
 }
 

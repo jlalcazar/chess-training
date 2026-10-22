@@ -304,3 +304,35 @@ line.arrow-muted, path.arrow-muted { stroke: #888; fill: #888; }
 .mode-rival { color: #d2691e; }
 .mode-line { color: #8e44ad; }
 .mode-none { color: var(--muted); }
+
+/* ------------------------------------------- golpe de vista y recorrido */
+.glance-card, .process { border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; margin: 10px 0; }
+.glance-card .cases { list-style: none; padding: 0; margin: 6px 0 0; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.glance-card .cases li { border: 1px dashed var(--border); border-radius: 6px; padding: 4px 8px; font-size: 0.85rem; color: var(--muted); }
+.glance-card .cases li.current { border-style: solid; color: var(--text); }
+.glance-card .cases li.tone-good { border-color: var(--good); background: color-mix(in srgb, var(--good) 8%, transparent); }
+.glance-card .cases li.tone-bad { border-color: var(--bad); background: color-mix(in srgb, var(--bad) 8%, transparent); }
+.glance-card .cases li.tone-info { border-color: var(--info); background: color-mix(in srgb, var(--info) 8%, transparent); }
+@media (max-width: 500px) { .glance-card .cases { grid-template-columns: 1fr; } }
+.process h3 { margin: 0 0 6px; }
+.phase-bar { display: flex; height: 14px; border-radius: 4px; overflow: hidden; gap: 1px; }
+.phase-seg { min-width: 3px; }
+.phase-list { list-style: none; padding: 0; margin: 6px 0; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 0.85rem; }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+.seg-calma { background: #8fb3d9; }
+.seg-cambios { background: #c39bd3; }
+.seg-vistazo { background: #f5b041; }
+.seg-candidatas { background: #3a6ea5; }
+.seg-tactica { background: #c0392b; }
+.seg-estrategia { background: #2f8f46; }
+.seg-calculo { background: #8e44ad; }
+.seg-decision { background: #b58a1b; }
+.seg-permite { background: #d2691e; }
+.seg-resolver { background: #555; }
+.seg-intuicion { background: #f5b041; }
+.seg-comprobacion { background: #2f8f46; }
+.pointing { border: 1px dashed var(--info); border-radius: 6px; padding: 4px 10px; margin: 8px 0; }
+.pointing .actions { margin: 6px 0; }
+.options { list-style: none; padding: 0; }
+.option-row { padding: 8px 0; border-bottom: 1px solid var(--border); }
+.option-row label { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
