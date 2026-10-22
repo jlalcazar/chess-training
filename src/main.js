@@ -57,6 +57,9 @@ const storage = {
 };
 
 const uciToMove = (uci) => ({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+const moveToUci = (m) => m.from + m.to + (m.promotion ?? '');
+// El tablero da la pieza al coronar; si faltara, dama (chess.js la ignora si la jugada no corona).
+const withPromotion = (m) => ({ from: m.from, to: m.to, promotion: m.promotion ?? 'q' });
 
 // ---------------------------------------------------------------------- estado
 
@@ -226,12 +229,13 @@ function syncBoard() {
     return;
   }
   if (step !== 'resumen') board.setPosition(state.playFen, { orientation: state.puzzle.heroColor, lastMove: state.lastMove });
-  board.setInteractive(['candidatas', 'intuicion', 'decision', 'resolver'].includes(step) && !(step === 'resolver' && state.ply >= state.puzzle.solution.length));
-  if (step === 'candidatas' || step === 'decision') {
+  const noting = ['candidatas', 'tactica', 'estrategia', 'decision'].includes(step);
+  board.setInteractive(noting || step === 'intuicion' || (step === 'resolver' && state.ply < state.puzzle.solution.length));
+  if (noting) {
     board.setArrows(state.candidates.map((c) => ({ from: c.move.from, to: c.move.to, tone: 'candidate' })));
   } else if (step === 'comprobacion' && state.intuition) {
     board.setArrows([{ from: state.intuition.move.from, to: state.intuition.move.to, tone: 'candidate' }]);
-  } else if (step !== 'tactica' && step !== 'estrategia') {
+  } else {
     board.setArrows([]);
   }
   if (step === 'resolver' && state.hint >= 2) {
@@ -468,12 +472,12 @@ function evaluateWithIdea(fen, move) {
 
 /** Apunta la jugada como candidata. Si está repetida o ya hay 5, deja un aviso y devuelve false. */
 function addCandidate(move) {
-  const repeated = state.candidates.find((c) => c.uci.startsWith(move.from + move.to));
+  const repeated = state.candidates.find((c) => c.uci === moveToUci(move));
   if (repeated || state.candidates.length >= MAX_CANDIDATES) {
     state.notice = repeated ? `${repeated.san} ya está entre tus candidatas.` : `Ya tienes ${MAX_CANDIDATES} candidatas: quita una para apuntar otra.`;
     return false;
   }
-  const ev = evaluateWithIdea(state.puzzle.fen, withDefaultPromotion(state.puzzle.fen, move));
+  const ev = evaluateWithIdea(state.puzzle.fen, withPromotion(move));
   if (ev) state.candidates.push(ev);
   return Boolean(ev);
 }
@@ -582,10 +586,11 @@ function questionView(questions, title, intro, onDone) {
       showFindings(result.findings);
     };
     if (q.open) {
-      const note = h('textarea', { rows: 2, placeholder: 'Escribe tu idea (opcional)' });
+      // Se guarda al escribir: apuntar una candidata en el tablero redibuja la pregunta.
+      const note = h('textarea', { rows: 2, placeholder: 'Escribe tu idea (opcional)', onInput: (e) => { state.notes = { ...state.notes, [q.id]: e.target.value }; } }, state.notes?.[q.id] ?? '');
       children.push(
         h('label', { class: 'block' }, 'Tu respuesta:', note),
-        h('div', { class: 'actions' }, h('button', { class: 'primary', onClick: () => { state.notes = { ...state.notes, [q.id]: note.value }; pick(null); } }, 'Ver el análisis')),
+        h('div', { class: 'actions' }, h('button', { class: 'primary', onClick: () => pick(null) }, 'Ver el análisis')),
       );
     } else {
       children.push(h('div', { class: 'actions' }, h('button', { onClick: () => pick(true) }, 'Sí'), h('button', { onClick: () => pick(false) }, 'No'), h('button', { class: 'link', onClick: () => pick(null) }, 'No lo sé')));
@@ -604,9 +609,8 @@ function questionView(questions, title, intro, onDone) {
         h('button', { class: 'primary', onClick: () => { state.questionIndex++; board.setMarks({}); render(); } }, state.questionIndex + 1 < questions.length ? 'Siguiente pregunta' : 'Continuar'),
       ),
     );
-    if (state.step === 'tactica' || state.step === 'estrategia') children.push(candidateReminder());
   }
-  return h('section', {}, ...children);
+  return h('section', {}, ...children, candidateReminder());
 }
 
 function findingsList(findings) {
@@ -622,12 +626,12 @@ function showFindings(findings) {
 
 function candidateReminder() {
   const full = state.candidates.length >= MAX_CANDIDATES;
-  return h('details', { class: 'reminder' },
-    h('summary', {}, `¿Te sugiere una candidata nueva? (${state.candidates.length}/${MAX_CANDIDATES})`),
-    h('p', { class: 'small' }, full
-      ? `Ya tienes ${MAX_CANDIDATES} candidatas, el máximo. Para apuntar otra, en el paso de decisión quita una y pulsa "Añadir candidata".`
-      : 'Recuérdala: en el paso de decisión pulsa "Añadir candidata" y muévela en el tablero. Se apunta en la tabla, no se juega.'),
-    candidateList(false),
+  return h('div', { class: 'reminder' },
+    h('p', { class: 'small' },
+      h('strong', {}, `¿Te sugiere una candidata nueva? (${state.candidates.length}/${MAX_CANDIDATES}) `),
+      full ? 'Ya tienes el máximo: quita una para apuntar otra.' : 'Muévela en el tablero: se apunta, no se juega.'),
+    noticeView(),
+    candidateList(true),
   );
 }
 
@@ -648,6 +652,7 @@ function estrategia() {
         h('button', { class: 'primary', onClick: () => go('decision') }, 'Ir a decidir'),
         h('button', { onClick: () => { state.forceStrategy = true; render(); } }, 'Hacer igualmente las preguntas'),
       ),
+      candidateReminder(),
     );
   }
   return questionView(plan.strategic, title, intro, () => queueMicrotask(() => go('decision')));
@@ -744,8 +749,13 @@ function onBoardMove(move) {
     case 'candidatas':
       addCandidate(move);
       return render();
+    case 'tactica':
+    case 'estrategia':
+      // La lista queda debajo de la pregunta: un aviso confirma que se apuntó (y que no se jugó).
+      if (addCandidate(move)) state.notice = `${state.candidates.at(-1).san} apuntada como candidata.`;
+      return render();
     case 'intuicion': {
-      const ev = evaluateWithIdea(state.puzzle.fen, withDefaultPromotion(state.puzzle.fen, move));
+      const ev = evaluateWithIdea(state.puzzle.fen, withPromotion(move));
       if (!ev) return;
       state.intuition = ev;
       return go('comprobacion');
@@ -772,25 +782,11 @@ function playFirstMove(move) {
   playUserMove(move);
 }
 
-/** Coronación sin mirar la solución: la pieza indicada o dama (el tablero no deja elegir). */
-function withDefaultPromotion(fen, move) {
-  const piece = load(fen).get(move.from);
-  if (piece?.type === 'p' && (move.to[1] === '8' || move.to[1] === '1')) return { from: move.from, to: move.to, promotion: move.promotion ?? 'q' };
-  return { from: move.from, to: move.to };
-}
-
-/** Al jugar: usa la pieza de la solución si coincide la jugada; si no, dama. */
-function withPromotion(move, ply) {
-  const expected = state.puzzle.solution[ply];
-  if (expected && expected.startsWith(move.from + move.to) && expected[4]) return { ...move, promotion: expected[4] };
-  return withDefaultPromotion(state.playFen, move);
-}
-
 function playUserMove(move) {
   const { puzzle } = state;
   const expected = puzzle.solution[state.ply];
   if (!expected) return;
-  const full = withPromotion(move, state.ply);
+  const full = withPromotion(move);
   const chess = load(state.playFen);
   let played;
   try {
@@ -798,7 +794,7 @@ function playUserMove(move) {
   } catch {
     return;
   }
-  const uci = played.from + played.to + (played.promotion ?? '');
+  const uci = moveToUci(played);
   // Lichess acepta cualquier mate aunque no sea la jugada registrada.
   const correct = uci === expected || chess.isCheckmate();
   log('move', { uci, expected, correct });
@@ -916,8 +912,7 @@ function finish(solved) {
   // Estadísticas por pregunta: qué preguntas señalaban la jugada clave.
   const key = evaluateWithIdea(puzzle.fen, uciToMove(puzzle.solution[0]));
   const tried = settings.mode === 'tiempo' ? state.candidates.map((c) => c.uci) : [state.intuition?.uci].filter(Boolean);
-  // El tablero no deja elegir la pieza al coronar: la clave se reconoce por sus casillas.
-  state.keyInCandidates = tried.some((uci) => uci.startsWith(puzzle.solution[0].slice(0, 4)));
+  state.keyInCandidates = tried.includes(puzzle.solution[0]);
   state.blind = blindSpots(puzzle.fen, puzzle.solution[0], tried);
   storage.set('stats', recordExercise(storage.get('stats', emptyStats()), {
     answers: state.answers,
@@ -1210,7 +1205,7 @@ async function finaleMove(move) {
   const chess = load(f.fen);
   let m;
   try {
-    m = chess.move({ ...move, promotion: move.promotion ?? 'q' });
+    m = chess.move(withPromotion(move));
   } catch {
     return;
   }

@@ -5,11 +5,13 @@ import { Chess } from 'chess.js';
 const PIECE_BASE = `${import.meta.env?.BASE_URL ?? '/'}pieces/cburnett/`;
 const FILES = 'abcdefgh';
 const SVG_NS = 'http://www.w3.org/2000/svg';
+// Orden de Lichess: dama, caballo, torre, alfil.
+const PROMOTION_PIECES = [['q', 'dama'], ['n', 'caballo'], ['r', 'torre'], ['b', 'alfil']];
 
 export class Board {
   /**
    * @param {HTMLElement} el
-   * @param {{ onMove?: (move: {from: string, to: string}) => void }} options
+   * @param {{ onMove?: (move: {from: string, to: string, promotion?: string}) => void }} options
    */
   constructor(el, { onMove } = {}) {
     this.el = el;
@@ -18,24 +20,37 @@ export class Board {
     this.orientation = 'w';
     this.interactive = false;
     this.selected = null;
+    this.promotion = null; // { from, to, color } mientras se elige la pieza de la coronación
     this.lastMove = null;
     this.marks = {};
     this.arrows = [];
     this.el.classList.add('board');
     this.el.addEventListener('click', (ev) => this.#click(ev));
+    this.el.addEventListener('keydown', (ev) => {
+      if (ev.key !== 'Escape' || !this.promotion) return;
+      this.promotion = null;
+      this.render();
+    });
   }
 
   setPosition(fen, { orientation = this.orientation, lastMove = null } = {}) {
+    // Redibujar la misma posición no quita la pieza seleccionada ni el selector de coronación.
+    if (fen !== this.fen || orientation !== this.orientation) {
+      this.selected = null;
+      this.promotion = null;
+    }
     this.fen = fen;
     this.orientation = orientation;
     this.lastMove = lastMove;
-    this.selected = null;
     this.render();
   }
 
   setInteractive(on) {
     this.interactive = on;
-    this.selected = null;
+    if (!on) {
+      this.selected = null;
+      this.promotion = null;
+    }
     this.el.classList.toggle('interactive', on);
     this.render();
   }
@@ -69,6 +84,7 @@ export class Board {
   }
 
   render() {
+    const focused = this.promotion ? document.activeElement?.dataset?.promotion : null;
     const chess = new Chess(this.fen);
     const targets = new Set(this.selected ? chess.moves({ square: this.selected, verbose: true }).map((m) => m.to) : []);
     const frag = document.createDocumentFragment();
@@ -94,7 +110,31 @@ export class Board {
       frag.append(cell);
     }
     frag.append(this.#arrowLayer());
+    if (this.promotion) frag.append(this.#promotionLayer());
     this.el.replaceChildren(frag);
+    if (focused) this.el.querySelector(`[data-promotion="${focused}"]`).focus({ preventScroll: true });
+  }
+
+  /** Selector de coronación, como en Lichess: una columna de piezas desde la casilla hacia el centro. */
+  #promotionLayer() {
+    const { to, color } = this.promotion;
+    const [x, y] = this.#center(to);
+    const dir = y < 4 ? 1 : -1;
+    const layer = document.createElement('div');
+    layer.className = 'promotion';
+    PROMOTION_PIECES.forEach(([type, name], i) => {
+      const choice = document.createElement('button');
+      choice.type = 'button';
+      choice.className = 'promotion-choice';
+      choice.dataset.promotion = type;
+      choice.title = `Coronar ${name}`;
+      choice.setAttribute('aria-label', choice.title);
+      choice.style.left = `${(x - 0.5) * 12.5}%`;
+      choice.style.top = `${(y - 0.5 + i * dir) * 12.5}%`;
+      choice.style.backgroundImage = `url(${PIECE_BASE}${color}${type.toUpperCase()}.svg)`;
+      layer.append(choice);
+    });
+    return layer;
   }
 
   #arrowLayer() {
@@ -136,16 +176,31 @@ export class Board {
 
   #click(ev) {
     if (!this.interactive) return;
+    if (this.promotion) {
+      // Elegir una pieza corona; un clic fuera del selector lo cierra sin mover.
+      const choice = ev.target.closest('[data-promotion]')?.dataset.promotion;
+      const { from, to } = this.promotion;
+      this.promotion = null;
+      this.render();
+      if (choice) this.onMove?.({ from, to, promotion: choice });
+      return;
+    }
     const cell = ev.target.closest('.sq');
     if (!cell) return;
     const sq = cell.dataset.square;
     const chess = new Chess(this.fen);
     const piece = chess.get(sq);
     if (this.selected) {
-      const legal = chess.moves({ square: this.selected, verbose: true }).some((m) => m.to === sq);
+      const legal = chess.moves({ square: this.selected, verbose: true }).find((m) => m.to === sq);
       const from = this.selected;
       if (legal) {
         this.selected = null;
+        if (legal.promotion) {
+          this.promotion = { from, to: sq, color: legal.color };
+          this.render();
+          this.el.querySelector('.promotion-choice').focus({ preventScroll: true });
+          return;
+        }
         this.render();
         this.onMove?.({ from, to: sq });
         return;

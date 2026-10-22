@@ -37,13 +37,15 @@ Parámetros de URL útiles para depurar:
    debilidades, qué cambiar, mejores casillas).
    Las preguntas que no tienen respuesta de sí o no (peor pieza, plan del rival, cambios,
    estructura…) son **abiertas**: escribes tu idea y la contrastas con el análisis.
+   Si una pregunta te sugiere una candidata nueva, muévela en el tablero: se apunta, no se juega.
 5. **Decisión**: cada candidata muestra cuántos "síes" consigue, qué deja colgado y si abre
    una **idea forzada de varias jugadas** (p. ej. "da jaque → ataque doble → ganas material"),
-   sin desvelar las jugadas. Si las preguntas te sugirieron una jugada nueva, pulsa
-   **"Añadir candidata"** y muévela en el tablero: se apunta en la tabla (y cuenta como candidata
-   en las estadísticas) sin jugarse; si ya tienes 5, quita antes una. Sin ese botón, una jugada en
-   el tablero se juega directamente.
-6. **Jugar** la línea contra las respuestas del puzzle.
+   sin desvelar las jugadas. Para apuntar aquí otra jugada, pulsa **"Añadir candidata"** y
+   muévela en el tablero: se apunta en la tabla (y cuenta como candidata en las estadísticas) sin
+   jugarse; si ya tienes 5, quita antes una. Sin ese botón, una jugada en el tablero se juega
+   directamente.
+6. **Jugar** la línea contra las respuestas del puzzle. Al coronar, el tablero pregunta la pieza
+   (dama, caballo, torre o alfil), como en Lichess: en una subpromoción hay que elegir la buena.
 7. **Repaso**: solución explicada paso a paso, temas, si la clave estaba entre tus candidatas y en
    qué preguntas fallaste. Bajo el tablero puedes **navegar por toda la partida** (⏮ ◀ Ejercicio ▶ ⏭
    o las flechas del teclado), desde la posición inicial hasta el final de la solución.
