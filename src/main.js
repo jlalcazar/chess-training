@@ -466,17 +466,16 @@ function evaluateWithIdea(fen, move) {
   return ev;
 }
 
+/** Apunta la jugada como candidata. Si está repetida o ya hay 5, deja un aviso y devuelve false. */
 function addCandidate(move) {
-  const full = withDefaultPromotion(state.puzzle.fen, move);
-  const uci = full.from + full.to + (full.promotion ?? '');
-  const repeated = state.candidates.find((c) => c.uci === uci);
-  if (repeated) state.notice = `${repeated.san} ya está entre tus candidatas.`;
-  else if (state.candidates.length >= MAX_CANDIDATES) state.notice = `Ya tienes ${MAX_CANDIDATES} candidatas: quita una para apuntar otra.`;
-  else {
-    const ev = evaluateWithIdea(state.puzzle.fen, full);
-    if (ev) state.candidates.push(ev);
+  const repeated = state.candidates.find((c) => c.uci.startsWith(move.from + move.to));
+  if (repeated || state.candidates.length >= MAX_CANDIDATES) {
+    state.notice = repeated ? `${repeated.san} ya está entre tus candidatas.` : `Ya tienes ${MAX_CANDIDATES} candidatas: quita una para apuntar otra.`;
+    return false;
   }
-  render();
+  const ev = evaluateWithIdea(state.puzzle.fen, withDefaultPromotion(state.puzzle.fen, move));
+  if (ev) state.candidates.push(ev);
+  return Boolean(ev);
 }
 
 function removeCandidate(i) {
@@ -743,7 +742,8 @@ function onBoardMove(move) {
   if (!state) return;
   switch (state.step) {
     case 'candidatas':
-      return addCandidate(move);
+      addCandidate(move);
+      return render();
     case 'intuicion': {
       const ev = evaluateWithIdea(state.puzzle.fen, withDefaultPromotion(state.puzzle.fen, move));
       if (!ev) return;
@@ -752,8 +752,9 @@ function onBoardMove(move) {
     }
     case 'decision':
       if (!state.addingCandidate) return playFirstMove(move);
-      state.addingCandidate = false;
-      return addCandidate(move);
+      // Si no se apunta (repetida), el modo sigue activo: el siguiente movimiento tampoco se juega.
+      if (addCandidate(move)) state.addingCandidate = false;
+      return render();
     case 'comprobacion':
       return playFirstMove(move);
     case 'resolver':
@@ -914,9 +915,9 @@ function finish(solved) {
   storage.set('history', history.slice(0, 200));
   // Estadísticas por pregunta: qué preguntas señalaban la jugada clave.
   const key = evaluateWithIdea(puzzle.fen, uciToMove(puzzle.solution[0]));
-  const keyUci = key?.uci;
   const tried = settings.mode === 'tiempo' ? state.candidates.map((c) => c.uci) : [state.intuition?.uci].filter(Boolean);
-  state.keyInCandidates = tried.includes(keyUci);
+  // El tablero no deja elegir la pieza al coronar: la clave se reconoce por sus casillas.
+  state.keyInCandidates = tried.some((uci) => uci.startsWith(puzzle.solution[0].slice(0, 4)));
   state.blind = blindSpots(puzzle.fen, puzzle.solution[0], tried);
   storage.set('stats', recordExercise(storage.get('stats', emptyStats()), {
     answers: state.answers,
@@ -934,7 +935,6 @@ function finish(solved) {
 function resumen() {
   const { puzzle } = state;
   const key = evaluateMove(puzzle.fen, uciToMove(puzzle.solution[0]));
-  const solutionInCandidates = state.candidates.some((c) => c.uci === key.uci) || state.intuition?.uci === key.uci;
   const isOpen = (id) => [...state.plan.tactical, ...state.plan.strategic].find((q) => q.id === id)?.open;
   const missed = Object.entries(state.answers).filter(([id, a]) => a && !isOpen(id) && a.user !== null && a.user !== a.result.yes);
   const history = storage.get('history', []);
@@ -951,8 +951,8 @@ function resumen() {
     lineView(),
     themesView(),
     settings.mode === 'tiempo'
-      ? h('p', { class: solutionInCandidates ? 'ok' : 'ko' }, solutionInCandidates ? 'La jugada clave estaba entre tus candidatas. La técnica de candidatas funciona.' : 'La jugada clave no estaba entre tus candidatas. Repasa: ¿qué pregunta te habría llevado a ella?')
-      : h('p', { class: state.intuition?.uci === key.uci ? 'ok' : 'ko' }, state.intuition?.uci === key.uci ? 'Tu intuición acertó.' : `Tu intuición fue ${state.intuition?.san ?? '—'}. Con más tiempo, el proceso completo ayuda a corregirla.`),
+      ? h('p', { class: state.keyInCandidates ? 'ok' : 'ko' }, state.keyInCandidates ? 'La jugada clave estaba entre tus candidatas. La técnica de candidatas funciona.' : 'La jugada clave no estaba entre tus candidatas. Repasa: ¿qué pregunta te habría llevado a ella?')
+      : h('p', { class: state.keyInCandidates ? 'ok' : 'ko' }, state.keyInCandidates ? 'Tu intuición acertó.' : `Tu intuición fue ${state.intuition?.san ?? '—'}. Con más tiempo, el proceso completo ayuda a corregirla.`),
     !state.keyInCandidates && state.blind?.length
       ? h('p', { class: 'blind' }, h('strong', {}, 'Por qué pudo costarte verla: '), `es ${state.blind.map((b) => BLIND_SPOTS[b]).join('; ')}. Estos son puntos ciegos frecuentes: tenlos en cuenta en el barrido.`)
       : null,
