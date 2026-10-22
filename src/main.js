@@ -10,7 +10,7 @@ import { PHASE_NAMES, fixation, keyFirstSeen, phaseDurations } from './timeline.
 import { ERROR_INFO, classifyMistake, errorAdvice } from './errors.js';
 import { PROMOTION, STAGES, ladder, planQuestions, updateScaffold } from './scaffold.js';
 import { EVAL_SYMBOLS, blindQuestions, cpToSymbol, firstDeviation, gradeBlind, playLine, rivalNode, symbolOf } from './blindline.js';
-import { SRS_INTERVALS, dueReviews, dueText, emptyProgress, failCount, learnedPuzzles, legacyCount, recordAttempt, srsChange, themeSummary, upcomingReviews } from './progress.js';
+import { SRS_INTERVALS, startOfDay, dueReviews, dueText, emptyProgress, failCount, learnedPuzzles, legacyCount, recordAttempt, srsChange, themeSummary, upcomingReviews } from './progress.js';
 import { DIFFICULTIES, THEMES, THEME_HELP, fetchDailyPuzzle, fetchNextPuzzle, fetchPuzzleById, themeName } from './lichess.js';
 import {
   BREATHING,
@@ -286,7 +286,8 @@ function render() {
   const stepper = h('ol', { class: 'stepper' }, steps.map(([id, label], i) => h('li', { class: i < idx ? 'done' : i === idx ? 'current' : '' }, label)));
 
   const views = { calma, cambios, vistazo, candidatas, tactica, estrategia, calculo, decision, permite, resolver, resumen, intuicion, comprobacion, remate };
-  panel.replaceChildren(header, stepper, views[state.step]());
+  const reminder = state.step !== 'resumen' && state.step !== 'remate' ? state.lastFail ??= lastFailNote() ?? false : null;
+  panel.replaceChildren(...[header, stepper, reminder || null, views[state.step]()].filter(Boolean));
   if (DEBUG) panel.append(h('details', { class: 'debug' }, h('summary', {}, 'Depuración'), h('pre', {}, JSON.stringify({ ...state, plan: undefined }, null, 2))));
   syncBoard();
 }
@@ -343,7 +344,7 @@ function syncBoard() {
   board.setInteractive((['candidatas', 'intuicion', 'decision', 'resolver'].includes(step) || (step === 'vistazo' && !state.glance) || (step === 'permite' && state.safety?.guess === undefined)) && !(step === 'resolver' && (state.revealed || state.ply >= state.puzzle.solution.length)));
   board.setPickMode(Boolean(state.pointing));
   if (step === 'candidatas' || step === 'decision') {
-    board.setArrows(state.candidates.map((c) => ({ from: c.move.from, to: c.move.to, tone: 'candidate' })));
+    board.setArrows(state.candidates.map((c, i) => ({ from: c.move.from, to: c.move.to, tone: step === 'decision' && state.selectedCandidate === i ? 'good' : 'candidate' })));
   } else if (step === 'comprobacion' && state.intuition) {
     board.setArrows([{ from: state.intuition.move.from, to: state.intuition.move.to, tone: 'candidate' }]);
   } else if (!MARK_STEPS.includes(step)) {
@@ -586,6 +587,66 @@ document.addEventListener('keydown', (ev) => {
   ev.preventDefault();
   navigate(target);
 });
+
+// ------------------------------------------------------ atajos de teclado
+
+/** El botón visible y activo que responde a una tecla (`data-key`) dentro de `root`. */
+function keyButton(root, key) {
+  return [...root.querySelectorAll(`button[data-key="${CSS.escape(key)}"]`)].find((b) => !b.disabled && b.offsetParent !== null) ?? null;
+}
+
+// S y N responden, ? pide pista, Intro continúa, 1-5 eligen candidata (o la opción numerada), P juega.
+document.addEventListener('keydown', (ev) => {
+  if (ev.ctrlKey || ev.metaKey || ev.altKey || ['INPUT', 'TEXTAREA', 'SELECT'].includes(ev.target.tagName)) return;
+  const dialog = document.querySelector('dialog[open]');
+  const root = dialog ?? panel;
+  const key = ev.key === 'Enter' ? 'enter' : ev.key.toLowerCase();
+  if (!['s', 'n', '?', 'enter', 'p', '1', '2', '3', '4', '5'].includes(key)) return;
+  // En Decisión, 1-5 eligen candidata y P la juega.
+  if (!dialog && state?.step === 'decision' && /^[1-5p]$/.test(key)) {
+    if (key === 'p') {
+      const c = state.candidates[state.selectedCandidate ?? -1];
+      if (!c) return;
+      ev.preventDefault();
+      return playDecision(c.move);
+    }
+    const i = Number(key) - 1;
+    if (!state.candidates[i]) return;
+    ev.preventDefault();
+    state.selectedCandidate = i;
+    return render();
+  }
+  let button = keyButton(root, key);
+  if (!button && key === 'enter' && ev.target.tagName !== 'BUTTON') button = [...root.querySelectorAll('button.primary')].find((b) => !b.disabled && b.offsetParent !== null && !b.closest('table, .settings'));
+  if (!button) return;
+  ev.preventDefault();
+  button.click();
+});
+
+// ----------------------------------------------- barra de acciones (móvil)
+
+const mobileBar = h('div', { id: 'mobile-bar', class: 'mobile-bar', hidden: true });
+document.body.append(mobileBar);
+
+/** Por debajo de 860 px, las acciones principales del panel en una barra fija abajo. */
+function renderMobileBar() {
+  const buttons = [...panel.querySelectorAll('button[data-key], button.primary')]
+    .filter((b) => b.offsetParent !== null && !b.closest('.findings, .puzzle-head, table'))
+    .slice(-4);
+  mobileBar.replaceChildren(...buttons.map((b) => h('button', { class: b.classList.contains('primary') ? 'primary' : '', disabled: b.disabled, onClick: () => b.click() }, b.textContent)));
+  mobileBar.hidden = !buttons.length;
+  document.body.classList.toggle('has-mobile-bar', buttons.length > 0);
+}
+
+let mobileBarQueued = false;
+new MutationObserver(() => {
+  if (mobileBarQueued) return;
+  mobileBarQueued = true;
+  requestAnimationFrame(() => {
+    mobileBarQueued = false;
+    renderMobileBar();
+  });
+}).observe(panel, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled'] });
 
 // --------------------------------------------------------------- paso: calma
 
@@ -1232,8 +1293,8 @@ function quickCheckView(group, plan, title, onDone) {
 
 function decision() {
   const rows = state.candidates.map((c, i) =>
-    h('tr', {},
-      h('td', {}, h('strong', {}, c.san)),
+    h('tr', { class: state.selectedCandidate === i ? 'selected' : '', onClick: (ev) => { if (ev.target.tagName === 'BUTTON') return; state.selectedCandidate = i; render(); } },
+      h('td', {}, h('span', { class: 'kbd' }, String(i + 1)), ' ', h('strong', {}, c.san)),
       h('td', { class: 'yes' }, String(c.yesCount)),
       h('td', {}, c.tags.length ? h('ul', {}, c.tags.map((t) => h('li', {}, t.text))) : h('span', { class: 'muted' }, '—'),
         // Los avisos solo se ven después de comprobar tú qué permite la jugada.
@@ -2106,11 +2167,45 @@ function saveProgress(success) {
   const { puzzle } = state;
   const progress = loadProgress();
   const before = progress.puzzles[puzzle.id];
-  const after = recordAttempt(progress, puzzle, { success, mistakes: state.mistakes.length, hintsUsed: state.hintsUsed, revealed: state.revealed, now: Date.now() });
+  const after = recordAttempt(progress, puzzle, { success, mistakes: state.mistakes.length, hintsUsed: state.hintsUsed, revealed: state.revealed, now: Date.now(), detail: success ? null : failDetail() });
   state.progressStored = storage.set('progress', after);
   state.srsChange = state.progressStored ? srsChange(before, after.puzzles[puzzle.id]) : null;
   state.firstTry = !before;
   refreshReviewBadge();
+}
+
+/** Qué paso falló (para recordarlo cuando el ejercicio vuelva en el repaso). */
+function failDetail() {
+  const { puzzle } = state;
+  const closed = [...state.plan.tactical, ...state.plan.strategic].filter((q) => !q.open).map((q) => q.id);
+  const questions = Object.entries(state.answers)
+    .filter(([id, a]) => a && closed.includes(id) && (a.pointed ? !a.pointed.correct : a.user !== null && a.user !== a.result.yes))
+    .map(([id]) => id);
+  const tried = mode() === 'tiempo' ? state.candidates.map((c) => c.uci) : [state.intuition?.uci].filter(Boolean);
+  const keyMissed = !tried.includes(puzzle.solution[0]);
+  return {
+    questions,
+    blind: keyMissed ? blindSpots(puzzle.fen, puzzle.solution[0], tried) : [],
+    kinds: [...new Set(state.mistakes.map((m) => m.kind).filter(Boolean))],
+    keyMissed,
+    hints: state.hintsUsed,
+    revealed: state.revealed,
+  };
+}
+
+/** "La vez anterior…": lo que falló en el último intento fallado de este ejercicio. */
+function lastFailNote() {
+  const rec = loadProgress().puzzles[state.puzzle.id];
+  const last = rec?.attempts?.findLast((a) => !a.success && !(a.at >= state.startedAt));
+  if (!last) return null;
+  const d = last.detail;
+  const parts = [];
+  if (d?.questions?.length) parts.push(`fallaste ${d.questions.length === 1 ? 'la pregunta' : 'las preguntas'} ${d.questions.map((id) => `«${ALL_QUESTIONS.find((q) => q.id === id)?.text ?? id}»`).join(', ')}`);
+  if (d?.keyMissed) parts.push(`la clave no estaba entre tus candidatas${d.blind?.length ? ` (punto ciego: ${d.blind.map((b) => BLIND_SPOTS[b]).join('; ')})` : ''}`);
+  if (d?.kinds?.length) parts.push(`tu fallo fue de tipo ${d.kinds.map((k) => `«${ERROR_INFO[k]?.label.toLowerCase() ?? k}»`).join(' y ')}`);
+  if (!parts.length) parts.push(last.revealed ? 'viste la solución' : last.hintsUsed ? `usaste ${last.hintsUsed} pista(s)` : `cometiste ${last.mistakes} error(es)`);
+  const when = startOfDay(last.at) === startOfDay(Date.now()) ? 'hoy' : new Date(last.at).toLocaleDateString('es-ES');
+  return h('div', { class: 'last-fail' }, h('strong', {}, `La vez anterior (${when}): `), `${parts.join('; ')}. Esta vez, presta atención a eso.`);
 }
 
 function loadProgress() {

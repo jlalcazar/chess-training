@@ -388,3 +388,15 @@ line.arrow-muted, path.arrow-muted { stroke: #888; fill: #888; }
 .ladder .rung { font-size: 0.75rem; padding: 1px 6px; border: 1px solid var(--border); color: var(--muted); }
 .ladder .rung.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .ladder li > .muted { grid-column: 1 / -1; }
+table.decision tr.selected td { background: color-mix(in srgb, var(--good) 10%, transparent); }
+table.decision tbody tr { cursor: pointer; }
+.kbd { display: inline-block; min-width: 1.4em; text-align: center; font-size: 0.75rem; border: 1px solid var(--border); border-radius: 4px; color: var(--muted); }
+.mobile-bar { display: none; }
+@media (max-width: 860px) {
+  .mobile-bar:not([hidden]) { display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; gap: 6px; padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); background: var(--surface); border-top: 1px solid var(--border); box-shadow: 0 -2px 8px rgb(0 0 0 / 0.15); }
+  .mobile-bar button { flex: 1 1 0; min-width: 0; padding: 10px 4px; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  body.has-mobile-bar { padding-bottom: 80px; }
+}
+.last-fail { border-left: 4px solid var(--info); background: color-mix(in srgb, var(--info) 8%, transparent); padding: 6px 12px; margin: 0 0 10px; font-size: 0.9rem; border-radius: 2px; }
+.board-mode { flex-wrap: wrap; }
+@media (max-width: 860px), (hover: none) { .mode-draw { display: none; } }

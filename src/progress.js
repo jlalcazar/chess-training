@@ -61,7 +61,7 @@ const STUDY_GROUPS = ['tactica', 'mate', 'fase'];
  * Un ejercicio está "resuelto" si se completó sin errores, sin pistas y sin ver
  * la solución; si no, entra (o vuelve) al repaso espaciado.
  */
-export function recordAttempt(progress, puzzle, { success, mistakes = 0, hintsUsed = 0, revealed = false, now }) {
+export function recordAttempt(progress, puzzle, { success, mistakes = 0, hintsUsed = 0, revealed = false, now, detail = null }) {
   const next = structuredClone(progress ?? emptyProgress());
   next.puzzles ??= {};
   const prev = next.puzzles[puzzle.id];
@@ -70,7 +70,8 @@ export function recordAttempt(progress, puzzle, { success, mistakes = 0, hintsUs
   rec.themes = puzzle.themes;
   const firstTry = rec.attempts.length === 0;
   const wasDue = Boolean(rec.srs && isDue(rec.srs, now));
-  rec.attempts.push({ at: now, success, mistakes, hintsUsed, revealed, review: !firstTry });
+  // `detail`: qué paso falló (preguntas, puntos ciegos, tipo de error), para recordarlo en el repaso.
+  rec.attempts.push({ at: now, success, mistakes, hintsUsed, revealed, review: !firstTry, ...(detail ? { detail } : {}) });
   // Se acota el historial del ejercicio sin perder el primer intento (es el que cuenta en los temas).
   if (rec.attempts.length > MAX_ATTEMPTS) rec.attempts = [rec.attempts[0], ...rec.attempts.slice(-(MAX_ATTEMPTS - 1))];
 
