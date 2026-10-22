@@ -409,3 +409,10 @@ table.decision tbody tr { cursor: pointer; }
 .graph-solution { fill: rgb(58 110 165 / 0.25); }
 .move-classes ul { list-style: none; padding: 0; margin: 4px 0; }
 .move-classes li { margin: 4px 0; }
+.burst-head { display: flex; justify-content: space-between; font-size: 0.9rem; color: var(--muted); }
+.pace { margin: 8px 0; }
+.pace-fill { height: 6px; background: var(--accent); border-radius: 3px; transform-origin: left; animation: pace linear forwards; }
+@keyframes pace { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+.woodpecker-line { margin: 4px 0 0; color: var(--muted); }
+.woodpecker { border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; margin: 12px 0; }
+.woodpecker h3 { margin: 4px 0; }

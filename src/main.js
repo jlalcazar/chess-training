@@ -10,6 +10,7 @@ import { PHASE_NAMES, fixation, keyFirstSeen, phaseDurations } from './timeline.
 import { ERROR_INFO, classifyMistake, errorAdvice } from './errors.js';
 import { PROMOTION, STAGES, ladder, planQuestions, updateScaffold } from './scaffold.js';
 import { classifyMove, graphPaths } from './evalgraph.js';
+import { BURST_SECONDS, PACES, WOODPECKER_SIZE, addPuzzle, balancePositions, burstSummary, cycleMode, cycleNumber, gamePositions, newWoodpecker, nextInCycle, nextPace, recordBurst, recordWoodpecker, rng, shuffle, startNextCycle, woodpeckerStatus } from './drills.js';
 import { EVAL_SYMBOLS, blindQuestions, cpToSymbol, firstDeviation, gradeBlind, playLine, rivalNode, symbolOf } from './blindline.js';
 import { SRS_INTERVALS, startOfDay, dueReviews, dueText, emptyProgress, failCount, learnedPuzzles, legacyCount, recordAttempt, srsChange, themeSummary, upcomingReviews } from './progress.js';
 import { DIFFICULTIES, THEMES, THEME_HELP, fetchDailyPuzzle, fetchNextPuzzle, fetchPuzzleById, themeName } from './lichess.js';
@@ -67,13 +68,14 @@ function stopTimer() {
   timer = null;
 }
 
-function newState(puzzle) {
+function newState(puzzle, modeOverride = null) {
   const plan = questionPlan(puzzle.fen, settings.level);
+  const exerciseMode = modeOverride ?? (settings.mode === 'mixto' ? 'tiempo' : settings.mode);
   return {
     puzzle,
     plan,
-    mode: settings.mode,
-    flow: flowFor(settings.mode, puzzle),
+    mode: exerciseMode,
+    flow: flowFor(exerciseMode, puzzle),
     step: null,
     candidates: [],
     addingCandidate: false, // en Decisión: el próximo movimiento en el tablero se apunta, no se juega
@@ -167,6 +169,7 @@ function renderSettings() {
     h('button', { onClick: () => loadPuzzle('daily') }, 'Puzzle del día'),
     h('button', { id: 'review-button', class: due ? 'review-due' : '', onClick: openReview, title: 'Ejercicios fallados para repetir de forma espaciada' }, due ? `Repaso (${due})` : 'Repaso'),
     h('button', { onClick: openThemes, title: 'Resueltos y no resueltos por tema' }, 'Temas'),
+    h('button', { onClick: openBurst, title: '2 minutos de una sola pregunta, posiciones seguidas' }, 'Ráfaga'),
     h('button', { onClick: openStats }, 'Estadísticas'),
     h('button', { onClick: openOptions, title: 'Opciones de entrenamiento: pasos y ayudas que puedes activar o quitar' }, 'Opciones'),
   );
@@ -207,10 +210,11 @@ function openOptions() {
 let loadSeq = 0;
 
 /** `source`: nada (siguiente de Lichess), 'daily', un id de Lichess o un ejercicio ya guardado. */
-async function loadPuzzle(source, { srs = false } = {}) {
+async function loadPuzzle(source, { srs = false, woodpecker = false, modeOverride = null } = {}) {
   const request = ++loadSeq;
   stopTimer();
   cancelEngine();
+  endDrill();
   panel.replaceChildren(h('p', { class: 'muted' }, 'Pidiendo un ejercicio a Lichess…'));
   try {
     const puzzle =
@@ -223,8 +227,10 @@ async function loadPuzzle(source, { srs = false } = {}) {
             : await fetchNextPuzzle({ angle: settings.angle, difficulty: settings.difficulty });
     if (request !== loadSeq) return;
     log('puzzle', puzzle);
-    state = newState(puzzle);
+    state = newState(puzzle, modeOverride);
+    state.woodpecker = woodpecker;
     state.step = state.flow[0];
+    savePool(puzzle);
     state.stepAt = Date.now();
     track('phase', { step: state.step });
     state.srsSession = srs;
@@ -288,12 +294,22 @@ function render() {
 
   const views = { calma, cambios, vistazo, candidatas, tactica, estrategia, calculo, decision, permite, resolver, resumen, intuicion, comprobacion, remate };
   const reminder = state.step !== 'resumen' && state.step !== 'remate' ? state.lastFail ??= lastFailNote() ?? false : null;
-  panel.replaceChildren(...[header, stepper, reminder || null, views[state.step]()].filter(Boolean));
+  panel.replaceChildren(...[header, state.woodpecker ? woodpeckerLine() : null, stepper, reminder || null, views[state.step]()].filter(Boolean));
   if (DEBUG) panel.append(h('details', { class: 'debug' }, h('summary', {}, 'Depuración'), h('pre', {}, JSON.stringify({ ...state, plan: undefined }, null, 2))));
   syncBoard();
 }
 
 function nextButton(done) {
+  if (state.woodpecker) {
+    const st = woodpeckerStatus(storage.get('woodpecker', null) ?? newWoodpecker('', 0));
+    const skip = () => {
+      // Pasar sin terminarlo cuenta como fallado en este ciclo.
+      const wp = storage.get('woodpecker', null);
+      if (!state.finished && wp?.ids.includes(state.puzzle.id)) storage.set('woodpecker', recordWoodpecker(wp, state.puzzle.id, { ok: false, ms: Date.now() - state.startedAt }));
+      continueWoodpecker();
+    };
+    return h('button', { class: done ? 'primary next' : 'next', title: done ? '' : 'Pasar sin terminarlo cuenta como fallado en este ciclo', onClick: skip }, st.complete ? 'Fin del ciclo →' : `Siguiente del ciclo (${Math.min(st.done + 1, st.total)}/${st.total}) →`);
+  }
   const pending = state.srsSession ? dueReviews(loadProgress(), Date.now()).filter((r) => r.id !== state.puzzle.id).length : 0;
   if (pending) {
     return h('button', { class: done ? 'primary next' : 'next', onClick: () => startReviewSession(state.puzzle.id) }, `Siguiente repaso (${pending}) →`);
@@ -414,6 +430,7 @@ function renderBoardMode() {
 }
 
 function onBoardPick(sq) {
+  if (drill?.onPick) return drill.onPick(sq);
   if (!state?.pointing) return;
   state.pointing.onPick(sq);
 }
@@ -2137,6 +2154,10 @@ function finish(solved) {
   }));
   if (settings.scaffold && mode() === 'tiempo') updateLadder(key, keyUci);
   saveProgress(state.success);
+  if (state.woodpecker) {
+    const wp = storage.get('woodpecker', null);
+    if (wp?.ids.includes(puzzle.id)) storage.set('woodpecker', recordWoodpecker(wp, puzzle.id, { ok: state.success, ms: state.endedAt }));
+  }
   state.review = buildReview(puzzle);
   go('resumen');
   if (settings.engineOn) startEngine();
@@ -2906,8 +2927,17 @@ function statsView() {
 }
 
 /** Ráfagas de fluidez: la última de cada pregunta. */
-function burstStats() {
-  return null;
+function burstStats(raw) {
+  const entries = Object.entries(raw.bursts ?? {});
+  if (!entries.length) return null;
+  return h('div', { class: 'stats-block' },
+    h('h3', {}, 'Ráfagas de fluidez'),
+    h('ul', { class: 'blind-stats' }, entries.map(([qid, list]) => {
+      const last = list.at(-1);
+      const best = Math.max(...list.map((x) => x.perMinute));
+      return h('li', {}, `${burstText(qid)}: `, h('strong', {}, `${last.perMinute} por minuto`), ` con ${pct(last.accuracy)} de acierto · ${list.length} ${list.length === 1 ? 'ráfaga' : 'ráfagas'} · mejor marca ${best} por minuto`);
+    })),
+  );
 }
 
 /** Modo «¿hay táctica o toca mejorar?». */
@@ -3077,7 +3107,7 @@ function themeRow(t) {
       bar(t.rate, tone),
     ),
     h('div', { class: 'theme-detail' },
-      h('div', { class: 'actions' }, h('button', { class: 'primary', onClick: () => trainTheme(t.theme) }, `Entrenar: ${themeName(t.theme)}`)),
+      h('div', { class: 'actions' }, h('button', { class: 'primary', onClick: () => trainTheme(t.theme) }, `Entrenar: ${themeName(t.theme)}`), h('button', { onClick: () => startWoodpecker(t.theme) }, 'Ciclo Woodpecker')),
       THEME_HELP[t.theme] ? h('p', { class: 'muted small' }, THEME_HELP[t.theme].text) : null,
       h('div', { class: 'two-cols' },
         h('div', {}, h('h4', {}, `No resueltos (${t.failed.length})`), t.failed.length ? h('ul', {}, t.failed.map((r) => puzzleItem(r, r.srs ? `en repaso, ${dueText(r.srs.due, Date.now())}` : r.learnedAt ? 'aprendido en el repaso' : ''))) : h('p', { class: 'muted small' }, 'Ninguno.')),
@@ -3099,6 +3129,7 @@ function openThemes() {
   if (!total) {
     return openDialog('themes-dialog', 'Mis temas',
       h('p', {}, 'Todavía no hay ejercicios. Cada ejercicio que termines se clasifica por sus temas de Lichess como resuelto (sin errores, sin pistas y sin ver la solución) o no resuelto.'),
+      woodpeckerSection([]),
       legacyNote,
     );
   }
@@ -3114,6 +3145,7 @@ function openThemes() {
         ? 'Sin áreas débiles por ahora: no has fallado ningún tema con 3 o más ejercicios.'
         : 'Con al menos 3 ejercicios de un tema empezaré a señalar tus áreas a estudiar.'),
     strongest.length ? h('div', {}, h('h3', {}, 'Puntos fuertes'), h('ul', { class: 'areas' }, strongest.map((t) => card(t, 'strong')))) : null,
+    woodpeckerSection(weakest),
     ...groups.map((g) => h('section', { class: 'theme-group' }, h('h3', {}, g.name), ...g.themes.map(themeRow))),
     legacyNote,
     h('div', { class: 'actions' },
@@ -3151,6 +3183,306 @@ function openReview() {
       ? h('details', {}, h('summary', {}, `Aprendidos (${learned.length})`), h('ul', { class: 'review-list' }, learned.map((r) => puzzleItem(r))))
       : null,
   );
+}
+
+// ---------------------------------------------- ciclos Woodpecker por tema
+
+const minutes = (ms) => `${Math.max(1, Math.round(ms / 60000))} min`;
+
+/** Línea de estado del ciclo en el panel del ejercicio. */
+function woodpeckerLine() {
+  const wp = storage.get('woodpecker', null);
+  if (!wp) return null;
+  const st = woodpeckerStatus(wp);
+  return h('p', { class: 'woodpecker-line small' },
+    h('strong', {}, `Woodpecker · ${themeName(st.theme)}`),
+    ` · ciclo ${st.cycle} (${st.mode === 'tiempo' ? 'proceso completo' : 'sin tiempo'}) · ${st.done}/${st.total}`,
+    st.budget ? ` · objetivo ${minutes(st.budget)}, llevas ${minutes(st.elapsed)}` : '',
+    st.automated ? ` · ${st.automated} automatizado(s)` : '');
+}
+
+/** Empieza un ciclo Woodpecker del tema (con los fallados de ese tema que ya están guardados). */
+function startWoodpecker(theme) {
+  const current = storage.get('woodpecker', null);
+  if (current && current.theme !== theme && !confirm(`Ya tienes un ciclo Woodpecker de ${themeName(current.theme)}. ¿Empezar uno nuevo de ${themeName(theme)}?`)) return;
+  let wp = current?.theme === theme ? current : newWoodpecker(theme, Date.now());
+  for (const rec of Object.values(loadProgress().puzzles)) {
+    if (rec.puzzle && rec.themes?.includes(theme)) wp = addPuzzle(wp, rec.puzzle);
+  }
+  storage.set('woodpecker', wp);
+  closeDialogs();
+  continueWoodpecker();
+}
+
+/** El siguiente ejercicio del ciclo: uno guardado o, en el primer ciclo, uno nuevo de Lichess. */
+async function continueWoodpecker() {
+  let wp = storage.get('woodpecker', null);
+  if (!wp) return openThemes();
+  const next = nextInCycle(wp);
+  if (next === null) return woodpeckerCycleEnd();
+  const n = cycleNumber(wp);
+  if (next !== 'nuevo') return loadPuzzle(wp.puzzles[next], { woodpecker: true, modeOverride: cycleMode(n) });
+  panel.replaceChildren(h('p', { class: 'muted' }, `Pidiendo un ejercicio de ${themeName(wp.theme)} a Lichess…`));
+  try {
+    let puzzle = null;
+    for (let tries = 0; tries < 4 && !puzzle; tries++) {
+      const p = await fetchNextPuzzle({ angle: wp.theme, difficulty: settings.difficulty });
+      if (!wp.ids.includes(p.id)) puzzle = p;
+    }
+    if (!puzzle) throw new Error('Lichess repite ejercicios que ya están en el ciclo. Prueba en un rato.');
+    wp = addPuzzle(storage.get('woodpecker', wp), puzzle);
+    storage.set('woodpecker', wp);
+    loadPuzzle(puzzle, { woodpecker: true, modeOverride: cycleMode(n) });
+  } catch (err) {
+    panel.replaceChildren(h('div', { class: 'error' }, err.message), h('button', { onClick: continueWoodpecker }, 'Reintentar'));
+  }
+}
+
+/** Fin de un ciclo: tiempos, aciertos, patrones automatizados y el siguiente ciclo. */
+function woodpeckerCycleEnd() {
+  const wp = storage.get('woodpecker', null);
+  const st = woodpeckerStatus(wp);
+  openDialog('woodpecker-dialog', `Ciclo Woodpecker: ${themeName(st.theme)}`,
+    h('p', {}, `Ciclo ${st.cycle} terminado: ${st.correct} de ${st.total} bien en ${minutes(st.elapsed)}${st.budget ? ` (objetivo: ${minutes(st.budget)})` : ''}.`),
+    h('ul', {}, st.history.map((c) => h('li', {}, `Ciclo ${c.cycle}: ${c.correct}/${c.done} bien, ${minutes(c.ms)}`))),
+    h('p', {}, h('strong', {}, `Patrones automatizados: ${st.automated} de ${st.total}`), h('span', { class: 'muted small' }, ' (bien y en menos de 10 s en dos ciclos seguidos)')),
+    h('p', { class: 'small' }, `El siguiente ciclo va sin tiempo (intuición y comprobación) y con la mitad de tiempo: unos ${minutes(st.elapsed / 2)} en total.`),
+    h('div', { class: 'actions' },
+      h('button', { class: 'primary', onClick: () => { storage.set('woodpecker', startNextCycle(wp, Date.now())); closeDialogs(); continueWoodpecker(); } }, `Empezar el ciclo ${st.cycle + 1}`),
+      h('button', { onClick: () => { if (confirm('¿Terminar y borrar este ciclo Woodpecker?')) { storage.set('woodpecker', null); closeDialogs(); } } }, 'Terminar el ciclo')),
+  );
+}
+
+/** Bloque del diálogo Temas: el ciclo en curso o el botón para empezar uno con el tema más débil. */
+function woodpeckerSection(weakest) {
+  const wp = storage.get('woodpecker', null);
+  const theme = weakest[0]?.theme ?? (settings.angle !== 'mix' ? settings.angle : null);
+  const intro = h('p', { class: 'muted small' }, `Método Woodpecker: el mismo conjunto de ${WOODPECKER_SIZE} ejercicios de un tema, una y otra vez. El primer ciclo con el proceso completo; los siguientes, sin tiempo y con la mitad del tiempo cada vez. Un patrón queda automatizado si lo resuelves bien en menos de 10 s en dos ciclos seguidos.`);
+  if (wp) {
+    const st = woodpeckerStatus(wp);
+    return h('div', { class: 'woodpecker' }, h('h3', {}, 'Ciclo Woodpecker'), intro,
+      h('p', {}, `${themeName(st.theme)} · ciclo ${st.cycle} · ${st.done}/${st.total} · ${st.automated} automatizado(s)`),
+      h('div', { class: 'actions' }, h('button', { class: 'primary', onClick: () => { closeDialogs(); continueWoodpecker(); } }, 'Continuar el ciclo'),
+        theme && theme !== wp.theme ? h('button', { onClick: () => startWoodpecker(theme) }, `Nuevo ciclo: ${themeName(theme)}`) : null));
+  }
+  if (!theme) return h('div', { class: 'woodpecker' }, h('h3', {}, 'Ciclo Woodpecker'), intro, h('p', { class: 'muted small' }, 'Cuando tengas un área a estudiar (o elijas un tema) podrás empezar un ciclo.'));
+  return h('div', { class: 'woodpecker' }, h('h3', {}, 'Ciclo Woodpecker'), intro,
+    h('div', { class: 'actions' }, h('button', { class: 'primary', onClick: () => startWoodpecker(theme) }, `Ciclo Woodpecker: ${themeName(theme)}`)));
+}
+
+// ------------------------------------------------- ráfagas de fluidez
+
+let drill = null;
+
+/** Posiciones recientes para las ráfagas (los últimos ejercicios cargados, sin la solución). */
+function savePool(puzzle) {
+  if (!puzzle?.gameMoves?.length) return;
+  const pool = storage.get('pool', []).filter((p) => p.id !== puzzle.id);
+  pool.unshift({ id: puzzle.id, fen: puzzle.fen, heroColor: puzzle.heroColor, gameMoves: puzzle.gameMoves });
+  storage.set('pool', pool.slice(0, 30));
+}
+
+function endDrill() {
+  if (!drill) return;
+  clearTimeout(drill.timeout);
+  clearInterval(drill.ticker);
+  drill = null;
+  board.setPickMode(false);
+  board.setMarks({});
+}
+
+// Preguntas que se pueden entrenar en ráfaga (de sí o no, con hallazgos que señalar).
+const BURST_QUESTIONS = ['mate', 'desprotegidas', 'amenazadas', 'geometria', 'debilidades'];
+
+function defaultBurstQuestion() {
+  const { rows, hardest } = summarize(storage.get('stats', emptyStats()));
+  if (hardest && BURST_QUESTIONS.includes(hardest.id)) return hardest.id;
+  const worst = rows.filter((r) => BURST_QUESTIONS.includes(r.id) && r.accuracy != null).sort((a, b) => a.accuracy - b.accuracy)[0];
+  return worst?.id ?? 'amenazadas';
+}
+
+const burstText = (id) => ALL_QUESTIONS.find((q) => q.id === id)?.text ?? id;
+
+/** Botón «Ráfaga»: 2 minutos de una sola pregunta. */
+function openBurst() {
+  closeDialogs();
+  stopTimer();
+  cancelEngine();
+  loadSeq++;
+  state = null;
+  endDrill();
+  drill = { kind: 'burst', phase: 'intro', qid: defaultBurstQuestion() };
+  boardMode.hidden = true;
+  boardNav.hidden = true;
+  renderBurst();
+}
+
+async function prepareBurst() {
+  const d = drill;
+  d.phase = 'preparing';
+  d.progress = 0;
+  renderBurst();
+  let pool = storage.get('pool', []);
+  const reviewPuzzles = Object.values(loadProgress().puzzles).filter((r) => r.puzzle).map((r) => r.puzzle);
+  if (!pool.length && !reviewPuzzles.length) {
+    try {
+      const p = await fetchNextPuzzle({ angle: 'mix', difficulty: settings.difficulty });
+      savePool(p);
+      pool = storage.get('pool', []);
+    } catch (err) {
+      if (drill !== d) return;
+      d.phase = 'error';
+      d.error = err.message;
+      return renderBurst();
+    }
+  }
+  const random = rng(Date.now() & 0xffff);
+  const positions = shuffle([...pool, ...reviewPuzzles].flatMap((p) => gamePositions(p, { from: 10 })), random);
+  // La pregunta de geometría es más cara de calcular: menos posiciones.
+  const limit = d.qid === 'geometria' ? 26 : 50;
+  const items = [];
+  for (const pos of positions.slice(0, limit)) {
+    if (drill !== d) return;
+    const result = answerQuestion(d.qid, pos.fen, pos.hero, { maxMs: 80 });
+    items.push({ ...pos, result, yes: result.findings.some((f) => f.targets.length) });
+    d.progress = items.length / Math.min(limit, positions.length);
+    if (items.length % 4 === 0) {
+      renderBurst();
+      await new Promise((r) => setTimeout(r, 0));
+    }
+  }
+  if (drill !== d) return;
+  d.queue = balancePositions(items, 40, random);
+  d.results = [];
+  d.pace = { pace: 0, streak: 0 };
+  d.phase = 'running';
+  d.startedAt = Date.now();
+  d.index = -1;
+  d.ticker = setInterval(() => {
+    if (drill !== d) return;
+    const left = Math.max(0, BURST_SECONDS - Math.floor((Date.now() - d.startedAt) / 1000));
+    const el = document.getElementById('burst-left');
+    if (el) el.textContent = `${left} s`;
+  }, 500);
+  nextBurstPosition();
+}
+
+function nextBurstPosition() {
+  const d = drill;
+  clearTimeout(d.timeout);
+  if (Date.now() - d.startedAt >= BURST_SECONDS * 1000 || d.index + 1 >= d.queue.length) return endBurst();
+  d.index++;
+  d.current = d.queue[d.index];
+  d.picks = [];
+  d.answered = null;
+  d.shownAt = Date.now();
+  board.setPosition(d.current.fen, { orientation: d.current.hero });
+  board.setMarks({});
+  board.setArrows([]);
+  board.setInteractive(false);
+  const pointing = settings.pointAnswers;
+  board.setPickMode(pointing);
+  d.onPick = pointing ? (sq) => {
+    if (d.answered) return;
+    const i = d.picks.indexOf(sq);
+    if (i >= 0) d.picks.splice(i, 1);
+    else d.picks.push(sq);
+    board.setMarks(Object.fromEntries(d.picks.map((x) => [x, 'pick'])));
+  } : null;
+  // Si se acaba el tiempo de la posición, cuenta como fallo.
+  d.timeout = setTimeout(() => drill === d && !d.answered && answerBurst(null), PACES[d.pace.pace]);
+  renderBurst();
+}
+
+/** Respuesta: true/false (S/N), 'picks' (señalando) o null (se acabó el tiempo). */
+function answerBurst(answer) {
+  const d = drill;
+  if (!d || d.answered) return;
+  clearTimeout(d.timeout);
+  const { result } = d.current;
+  let ok;
+  if (answer === 'picks') {
+    const pr = scorePicks(result.findings, d.picks);
+    ok = pr.correct;
+    const marks = {};
+    for (const f of pr.missed) for (const sq of f.targets) marks[sq] = 'missed';
+    for (const f of pr.found) for (const sq of f.targets) marks[sq] = 'found';
+    for (const sq of pr.falseAlarms) marks[sq] = 'false';
+    board.setMarks(marks);
+  } else {
+    ok = answer !== null && answer === d.current.yes;
+    const marks = {};
+    for (const f of result.findings) for (const sq of f.targets) marks[sq] = 'found';
+    board.setMarks(marks);
+  }
+  d.answered = { ok, timeout: answer === null, ms: Date.now() - d.shownAt };
+  d.results.push(d.answered);
+  d.pace = nextPace(d.pace, ok);
+  renderBurst();
+  // Corrección en 1 s y a la siguiente.
+  d.timeout = setTimeout(() => drill === d && nextBurstPosition(), 1000);
+}
+
+function endBurst() {
+  const d = drill;
+  clearTimeout(d.timeout);
+  clearInterval(d.ticker);
+  d.phase = 'done';
+  d.summary = burstSummary(d.results, Math.min(Date.now() - d.startedAt, BURST_SECONDS * 1000));
+  const { stats, previous } = recordBurst(storage.get('stats', emptyStats()), d.qid, d.summary, Date.now());
+  storage.set('stats', stats);
+  d.previous = previous;
+  board.setPickMode(false);
+  renderBurst();
+}
+
+function renderBurst() {
+  const d = drill;
+  if (!d) return;
+  const head = h('div', { class: 'puzzle-head' }, h('div', {}, h('strong', {}, 'Ráfaga de fluidez'), h('span', { class: 'muted' }, ` · ${burstText(d.qid)}`)),
+    h('button', { class: 'next', onClick: () => { endDrill(); loadPuzzle(); } }, 'Volver a los ejercicios'));
+  let body;
+  if (d.phase === 'intro') {
+    body = h('section', {},
+      h('h2', {}, '2 minutos de una sola pregunta'),
+      h('p', {}, 'Posiciones seguidas de tus ejercicios y de sus partidas, mitad con respuesta SÍ y mitad NO. Responde con S/N' + (settings.pointAnswers ? ' o señalando en el tablero' : '') + ': se corrige en 1 s y el ritmo se adapta (8 s por posición, luego 6 s, luego 4 s).'),
+      h('label', { class: 'block' }, 'Pregunta ', h('select', { onChange: (e) => { d.qid = e.target.value; } }, BURST_QUESTIONS.map((id) => h('option', { value: id, selected: id === d.qid }, burstText(id))))),
+      h('p', { class: 'muted small' }, 'Por defecto, la que más te cuesta según tus estadísticas.'),
+      h('div', { class: 'actions' }, h('button', { class: 'primary', 'data-key': 'enter', onClick: prepareBurst }, 'Empezar')),
+    );
+  } else if (d.phase === 'preparing') {
+    body = h('section', {}, h('p', { class: 'muted' }, `Preparando posiciones… ${Math.round((d.progress ?? 0) * 100)} %`));
+  } else if (d.phase === 'error') {
+    body = h('section', {}, h('p', { class: 'error' }, d.error), h('button', { onClick: prepareBurst }, 'Reintentar'));
+  } else if (d.phase === 'running') {
+    const a = d.answered;
+    const side = COLOR_NAMES[d.current.hero];
+    body = h('section', { class: 'burst' },
+      h('div', { class: 'burst-head' }, h('span', {}, `Posición ${d.index + 1} · juegan ${side}`), h('span', { id: 'burst-left', class: 'quick-timer' }, `${Math.max(0, BURST_SECONDS - Math.floor((Date.now() - d.startedAt) / 1000))} s`)),
+      h('h2', {}, burstText(d.qid)),
+      a ? null : h('div', { class: 'pace' }, h('div', { class: 'pace-fill', style: `animation-duration: ${PACES[d.pace.pace]}ms` }), h('span', { class: 'small muted' }, `${PACES[d.pace.pace] / 1000} s por posición`)),
+      a
+        ? h('p', { class: a.ok ? 'ok' : 'ko' }, a.ok ? '✔ Bien' : a.timeout ? '✘ Se acabó el tiempo' : '✘ No', a.ok ? '' : ` · ${d.current.result.findings.filter((f) => f.targets.length).map((f) => f.text).slice(0, 2).join('; ') || 'no había nada'}`)
+        : h('div', { class: 'actions' },
+          settings.pointAnswers ? h('button', { class: 'primary', 'data-key': 'enter', onClick: () => answerBurst('picks') }, 'Listo') : null,
+          h('button', { 'data-key': 's', onClick: () => answerBurst(true) }, 'Sí (S)'),
+          h('button', { 'data-key': 'n', onClick: () => answerBurst(settings.pointAnswers ? (d.picks = [], 'picks') : false) }, settings.pointAnswers ? 'No hay nada (N)' : 'No (N)')),
+    );
+  } else {
+    const s = d.summary;
+    const p = d.previous;
+    const diff = (a, b, unit = '') => (b == null ? '' : ` (${a >= b ? '+' : ''}${Math.round((a - b) * 10) / 10}${unit} respecto a la anterior)`);
+    body = h('section', {},
+      h('h2', {}, 'Fin de la ráfaga'),
+      h('p', {}, h('strong', {}, `${s.perMinute} posiciones por minuto`), diff(s.perMinute, p?.perMinute)),
+      h('p', {}, h('strong', {}, `Acierto: ${Math.round(s.accuracy * 100)} %`), ` (${s.correct} de ${s.n})`, p ? diff(s.accuracy * 100, p.accuracy * 100, ' puntos') : ''),
+      p ? null : h('p', { class: 'muted small' }, 'Es tu primera ráfaga de esta pregunta: la próxima vez verás la comparación.'),
+      h('div', { class: 'actions' },
+        h('button', { class: 'primary', 'data-key': 'enter', onClick: () => { drill = { kind: 'burst', phase: 'intro', qid: d.qid }; prepareBurst(); } }, 'Otra ráfaga'),
+        h('button', { onClick: () => { endDrill(); loadPuzzle(); } }, 'Volver a los ejercicios')),
+    );
+  }
+  panel.replaceChildren(head, body);
 }
 
 // ------------------------------------------------------------------ inicio

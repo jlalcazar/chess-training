@@ -102,8 +102,11 @@ const list = (items) => items.join(', ');
 const finding = (text, squares = [], tone = 'info', { targets = [], match = 'any', move = null } = {}) => ({ text, squares, tone, targets, match, move });
 const uci = (m) => m.from + m.to + (m.promotion ?? '');
 
-/** Responde a una pregunta del método. Devuelve { yes, findings } desde el punto de vista de `hero`. */
-export function answerQuestion(id, fen, hero) {
+/**
+ * Responde a una pregunta del método. Devuelve { yes, findings } desde el punto de vista de `hero`.
+ * `maxMs` limita la búsqueda de ideas forzadas (las ráfagas usan menos tiempo).
+ */
+export function answerQuestion(id, fen, hero, { maxMs = 400 } = {}) {
   const chess = load(fen);
   const enemy = other(hero);
   const findings = [];
@@ -115,7 +118,7 @@ export function answerQuestion(id, fen, hero) {
       const theirs = mateInOne(fen, enemy);
       // El objetivo es la jugada de mate: se "juega" señalando origen y destino.
       for (const m of mine) findings.push(finding(`Tienes mate en 1: ${m.san}`, [m.from, m.to], 'good', { targets: [m.from, m.to], match: 'all', move: uci(m) }));
-      const longMate = mine.length ? null : findForcingIdea(fen);
+      const longMate = mine.length ? null : findForcingIdea(fen, { maxMs });
       if (longMate?.mate) {
         const first = longMate.line[0].uci;
         findings.push(finding(`Hay un mate forzado en ${longMate.moves} jugadas: ${describeIdea(longMate, { moves: false })}`, [], 'good', { targets: [first.slice(0, 2), first.slice(2, 4)], match: 'all', move: first }));
@@ -148,7 +151,7 @@ export function answerQuestion(id, fen, hero) {
     }
     case 'geometria': {
       for (const c of [hero, enemy]) {
-        const idea = findForcingIdea(c === hero ? fen : withTurn(fen, c));
+        const idea = findForcingIdea(c === hero ? fen : withTurn(fen, c), { maxMs });
         if (idea) {
           const first = idea.line[0].uci;
           const ends = [first.slice(0, 2), first.slice(2, 4)];
