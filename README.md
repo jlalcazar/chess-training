@@ -81,6 +81,23 @@ ejercicios del modo "con tiempo" (el modo "sin tiempo" no hace preguntas).
   alternativas del rival** en cada jugada suya, y **rematar contra Stockfish** desde la posición
   final para demostrar que sabes convertir la ventaja.
 
+**Temas y repaso espaciado:**
+
+- **Temas**: cada ejercicio terminado se clasifica por sus temas de Lichess como *resuelto*
+  (sin errores, sin pistas y sin ver la solución) o *no resuelto*, según el primer intento.
+  Se agrupan en motivos tácticos, mates, fases de la partida, longitud, tipo de ventaja y
+  origen; cada tema despliega sus ejercicios resueltos y no resueltos (con enlace a Lichess y
+  botón para repetirlos). Arriba aparecen las **áreas a estudiar** (los temas con peor
+  porcentaje, con al menos 3 ejercicios) y los **puntos fuertes**, con un botón para entrenar
+  ese tema.
+- **Repaso (N)**: los ejercicios no resueltos se guardan y vuelven a los 1, 3, 7, 14 y 30 días
+  (sistema Leitner). Si lo aciertas cuando toca, pasa a la siguiente caja; si fallas, vuelve a
+  empezar; al superar la última, queda aprendido. "Empezar repaso" encadena los pendientes del
+  día. Los ejercicios guardados se repiten sin conexión.
+
+Todo se guarda en tu navegador (`localStorage`). Los ejercicios hechos antes de esta versión no
+guardaban sus temas.
+
 **Modo "sin tiempo"**: intuición (cuenta atrás de 20 s), comprobación de que no te dejas nada, jugar.
 
 ## Estructura
@@ -92,6 +109,7 @@ ejercicios del modo "con tiempo" (el modo "sin tiempo" no hace preguntas).
 | `src/method.js` | El método: niveles, preguntas y su respuesta calculada sobre la posición. |
 | `src/engine.js` | Evaluación real: Stockfish WASM en un Web Worker (UCI, `searchmoves` por candidata) y la nube de Lichess. |
 | `scripts/copy-stockfish.mjs` | Copia el motor de `node_modules/stockfish` a `public/stockfish/` (se ejecuta al instalar, en `dev` y en `build`). |
+| `src/progress.js` | Progreso por tema (primer intento) y repaso espaciado Leitner de los ejercicios fallados. |
 | `src/stats.js` | Estadísticas por pregunta: registro por ejercicio y resumen ordenado por dificultad. |
 | `src/board.js` | Tablero DOM con marcas y flechas. |
 | `src/main.js` | Flujo de pasos e interfaz. |
@@ -100,8 +118,6 @@ ejercicios del modo "con tiempo" (el modo "sin tiempo" no hace preguntas).
 
 Ideas sacadas de proyectos de código abierto (ver la conversación del 20/10/2026):
 
-- Repetición espaciada de los ejercicios fallados (como Listudy o Better Tactics).
-- Panel de puntos fuertes y débiles por tema de Lichess (como el *dashboard* de lila).
 - Gráfica de evaluación de la línea y clasificación tipo "brillante/excelente" (Chesskit, freechess).
 - Tablero chessground (el de Lichess) con flechas dibujables por el usuario y animaciones.
 
