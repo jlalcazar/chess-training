@@ -45,7 +45,61 @@ export function allPieces(chess) {
 
 const defenders = (chess, sq, color) => chess.attackers(sq, color);
 
-/** Piezas atacadas por el rival que están indefensas o atacadas por algo de menor valor. */
+// ------------------------------------------- SEE (Static Exchange Evaluation)
+
+/** La pieza de menos valor de `color` que ataca `sq` (el rey, la última). */
+function cheapestAttacker(chess, sq, color) {
+  let best = null;
+  for (const from of chess.attackers(sq, color)) {
+    const p = chess.get(from);
+    if (!best || VALUES[p.type] < VALUES[best.type]) best = { ...p, from };
+  }
+  return best;
+}
+
+/**
+ * Cuenta el cambio en `square` si `color` empieza a capturar (algoritmo "swap"):
+ * cada bando captura siempre con su pieza de menos valor, las piezas largas que
+ * quedan detrás entran en juego (rayos X) y cada bando puede pararse cuando ya
+ * no le conviene seguir. `from` fuerza la primera pieza que captura.
+ * Devuelve el material que gana `color` (0 si no le conviene capturar).
+ * No tiene en cuenta clavadas ni jaques: es un recuento estático.
+ */
+export function see(chess, square, color, { from } = {}) {
+  const target = chess.get(square);
+  if (!target || target.color === color) return 0;
+  const board = new Chess(chess.fen(), { skipValidation: true });
+  const gain = [];
+  let depth = 0;
+  let side = color;
+  let attacker = from ? { ...board.get(from), from } : cheapestAttacker(board, square, side);
+  if (!attacker?.type) return 0;
+  gain[0] = VALUES[target.type];
+  for (;;) {
+    // El rey solo puede capturar si la casilla no queda atacada.
+    if (attacker.type === 'k' && board.attackers(square, other(side)).filter((s) => s !== attacker.from).length) {
+      if (depth === 0) return 0;
+      break;
+    }
+    board.remove(attacker.from);
+    board.remove(square);
+    board.put({ type: attacker.type, color: side }, square);
+    depth++;
+    gain[depth] = VALUES[attacker.type] - gain[depth - 1];
+    side = other(side);
+    attacker = cheapestAttacker(board, square, side);
+    // Poda: ni continuando ni parando puede mejorar el resultado.
+    if (!attacker || Math.max(-gain[depth - 1], gain[depth]) < 0) break;
+  }
+  while (--depth > 0) gain[depth - 1] = -Math.max(-gain[depth - 1], gain[depth]);
+  // Con la primera captura forzada (`from`) el resultado puede ser negativo.
+  return from ? gain[0] : Math.max(0, gain[0]);
+}
+
+/** SEE de una captura concreta (puede ser negativa: la captura pierde material). */
+export const seeMove = (chess, move) => see(chess, move.to, chess.get(move.from).color, { from: move.from });
+
+/** Piezas que el rival gana en el cambio (SEE > 0), o el rey en jaque. */
 export function threatenedPieces(chess, color) {
   const out = [];
   for (const p of allPieces(chess)) {
@@ -56,11 +110,16 @@ export function threatenedPieces(chess, color) {
       out.push({ ...p, attackers, reason: 'está en jaque' });
       continue;
     }
+    const loss = see(chess, p.square, other(color));
+    if (loss <= 0) continue;
     const defs = defenders(chess, p.square, color);
     const minAttacker = Math.min(...attackers.map((s) => VALUES[chess.get(s).type]));
-    if (!defs.length) out.push({ ...p, attackers, reason: 'atacada y sin defensa' });
-    else if (minAttacker < VALUES[p.type]) out.push({ ...p, attackers, reason: 'atacada por una pieza de menos valor' });
-    else if (attackers.length > defs.length) out.push({ ...p, attackers, reason: 'más atacantes que defensores' });
+    const reason = !defs.length
+      ? 'atacada y sin defensa'
+      : minAttacker < VALUES[p.type]
+        ? 'atacada por una pieza de menos valor'
+        : 'pierde material en el cambio';
+    out.push({ ...p, attackers, reason, see: loss });
   }
   return out;
 }
@@ -194,24 +253,29 @@ export function evaluateMove(fen, move) {
 
   if (m.san.endsWith('#')) tags.push({ q: 'mate', text: 'da jaque mate' });
   else if (m.san.includes('+')) tags.push({ q: 'mate', text: 'da jaque' });
+  let exchange = null;
   if (m.captured) {
     const before = load(fen);
     const wasDefended = defenders(before, m.to, enemy).length > 0;
     const fem = ['r', 'q'].includes(m.captured);
+    // Al paso la casilla de destino está vacía: el recuento no aplica.
+    exchange = m.isEnPassant?.() ? VALUES.p : seeMove(before, m);
     if (!wasDefended) tags.push({ q: 'desprotegidas', text: `captura ${fem ? 'la' : 'el'} ${PIECE_NAMES[m.captured]} ${fem ? 'indefensa' : 'indefenso'}` });
-    else if (VALUES[m.captured] > VALUES[m.piece]) tags.push({ q: 'amenazadas', text: `gana material: ${PIECE_NAMES[m.piece]} por ${PIECE_NAMES[m.captured]}` });
-    else tags.push({ q: 'amenazadas', text: `captura ${PIECE_NAMES[m.captured]}` });
+    else if (exchange > 0) tags.push({ q: 'amenazadas', text: VALUES[m.captured] > VALUES[m.piece] ? `gana material: ${PIECE_NAMES[m.piece]} por ${PIECE_NAMES[m.captured]}` : `gana material en el cambio (+${exchange})` });
+    else if (exchange === 0) tags.push({ q: 'amenazadas', text: `cambia: ${PIECE_NAMES[m.piece]} por ${PIECE_NAMES[m.captured]}` });
+    else warnings.push(`la captura pierde material en el cambio (${exchange})`);
   }
   if (m.promotion) tags.push({ q: 'coronar', text: `corona ${PIECE_NAMES[m.promotion]}` });
 
   // Lo que ataca ahora la pieza movida (como si volviera a mover el mismo bando).
   const mine = load(withTurn(after, color));
   if (mine && !m.san.endsWith('#')) {
+    // Amenaza de verdad: capturar con la pieza movida gana material en el cambio.
     const targets = mine
       .moves({ verbose: true, square: m.to })
-      .filter((x) => x.captured)
-      .map((x) => ({ ...mine.get(x.to), square: x.to }))
-      .filter((p) => p.type !== 'k' && (defenders(mine, p.square, enemy).length === 0 || VALUES[p.type] > VALUES[m.piece]));
+      .filter((x) => x.captured && x.captured !== 'k')
+      .filter((x) => see(mine, x.to, color, { from: m.to }) > 0)
+      .map((x) => ({ ...mine.get(x.to), square: x.to }));
     const checks = m.san.includes('+');
     if (targets.length + (checks ? 1 : 0) >= 2) tags.push({ q: 'geometria', text: `ataque doble (${targets.map(pieceLabel).join(', ')}${checks ? ', rey' : ''})` });
     else if (targets.length) tags.push({ q: 'amenazadas', text: `amenaza ${pieceLabel(targets[0])}` });
@@ -234,7 +298,7 @@ export function evaluateMove(fen, move) {
   }
 
   const yes = new Set(tags.map((t) => t.q));
-  return { move: m, san: m.san, uci: m.from + m.to + (m.promotion ?? ''), tags, warnings, yesCount: yes.size, mate: m.san.endsWith('#') };
+  return { move: m, san: m.san, uci: m.from + m.to + (m.promotion ?? ''), tags, warnings, yesCount: yes.size, mate: m.san.endsWith('#'), exchange };
 }
 
 // ----------------------------- Estrategia -----------------------------
@@ -510,14 +574,13 @@ export function describeIdea(idea, { moves = true } = {}) {
 
 /**
  * Las jugadas "forzantes" de quien mueve en `fen`: jaques, capturas y amenazas
- * (la pieza movida ataca algo indefenso o de más valor). Es el barrido que
+ * (la pieza movida ataca algo que ganaría en el cambio). Es el barrido que
  * conviene hacer antes de cerrar la lista de candidatas.
  */
 export function forcingSweep(fen) {
   const chess = load(fen);
   if (!chess) return { checks: [], captures: [], threats: [] };
   const color = chess.turn();
-  const enemy = other(color);
   const checks = [];
   const captures = [];
   const threats = [];
@@ -532,7 +595,7 @@ export function forcingSweep(fen) {
     const hits = after
       .moves({ verbose: true, square: m.to })
       .filter((x) => x.captured && x.captured !== 'k')
-      .filter((x) => VALUES[x.captured] > VALUES[m.piece] || after.attackers(x.to, enemy).length === 0);
+      .filter((x) => see(after, x.to, color, { from: m.to }) > 0);
     if (hits.length) threats.push({ ...m, targets: hits.map((x) => x.to) });
   }
   return { checks, captures, threats };
