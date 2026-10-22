@@ -4,10 +4,11 @@ import { Board } from './board.js';
 import { $, h, storage, uciToMove } from './dom.js';
 import { BLIND_SPOTS, COLOR_NAMES, PIECE_NAMES, blindSpots, mateInOne, other, seeMove, describeIdea, evaluateMove, explainLine, findForcingIdea, forcingSweep, holes, lastMoveDiff, load, narratePly, outposts, pieceRoutes, squareControl, withTurn, worstPieces } from './analysis.js';
 import { DEFAULT_DEPTH, ENGINE_SOURCES, StockfishEngine, describeAdvantage, engineMove, evaluateMoves, evaluatePosition, formatScore, pvToSan, toCp, verdict, winChance } from './engine.js';
-import { emptyStats, recordExercise, summarize } from './stats.js';
+import { ALL_QUESTIONS, emptyStats, recordExercise, summarize } from './stats.js';
 import { CONFIDENCE, GLANCE_CASES, GLANCE_SECONDS, glanceCase } from './intuition.js';
 import { PHASE_NAMES, fixation, keyFirstSeen, phaseDurations } from './timeline.js';
 import { ERROR_INFO, classifyMistake, errorAdvice } from './errors.js';
+import { PROMOTION, STAGES, ladder, planQuestions, updateScaffold } from './scaffold.js';
 import { EVAL_SYMBOLS, blindQuestions, cpToSymbol, firstDeviation, gradeBlind, playLine, rivalNode, symbolOf } from './blindline.js';
 import { SRS_INTERVALS, dueReviews, dueText, emptyProgress, failCount, learnedPuzzles, legacyCount, recordAttempt, srsChange, themeSummary, upcomingReviews } from './progress.js';
 import { DIFFICULTIES, THEMES, THEME_HELP, fetchDailyPuzzle, fetchNextPuzzle, fetchPuzzleById, themeName } from './lichess.js';
@@ -903,7 +904,7 @@ const POINT_PROMPTS = {
   debilidades: 'Marca hasta 3 debilidades: peones aislados o doblados, un rey expuesto.',
 };
 
-function questionView(questions, title, intro, onDone) {
+function questionView(questions, title, intro, onDone, surprise = null) {
   const q = questions[state.questionIndex];
   if (!q) {
     onDone();
@@ -916,6 +917,7 @@ function questionView(questions, title, intro, onDone) {
     intro && h('p', { class: 'muted' }, intro),
     h('p', { class: 'progress' }, `Pregunta ${state.questionIndex + 1} de ${questions.length}`),
     h('h3', {}, q.text),
+    q.id === surprise ? h('p', { class: 'surprise small' }, 'Control sorpresa: esta pregunta ya la dominas, hoy vuelve paso a paso para comprobarlo.') : null,
     h('p', { class: 'hint' }, q.hint),
   ];
   const result = () => answerQuestion(q.id, state.puzzle.fen, state.puzzle.heroColor);
@@ -1092,26 +1094,138 @@ function candidateReminder() {
   );
 }
 
+/** Reparto de las preguntas del grupo según la ayuda que se retira (fijo durante el ejercicio). */
+function scaffoldPlan(group, questions) {
+  state.scaffoldPlans ??= {};
+  if (!state.scaffoldPlans[group]) {
+    const closed = questions.filter((q) => !q.open).map((q) => q.id);
+    const plan = planQuestions(storage.get('stats', emptyStats()).scaffold, closed, { enabled: settings.scaffold });
+    const byId = (ids) => questions.filter((q) => ids.includes(q.id));
+    state.scaffoldPlans[group] = {
+      guided: questions.filter((q) => q.open || plan.guided.includes(q.id)),
+      quick: byId(plan.quick),
+      auto: byId(plan.auto),
+      surprise: plan.surprise,
+    };
+  }
+  return state.scaffoldPlans[group];
+}
+
 function tactica() {
-  return questionView(state.plan.tactical, `${stepNo('tactica')}. Preguntas tácticas`, `${LEVELS[settings.level].tacticalNote} Fíjate en los dos colores.`, () => queueMicrotask(() => go('estrategia')));
+  const plan = scaffoldPlan('tactica', state.plan.tactical);
+  const title = `${stepNo('tactica')}. Preguntas tácticas`;
+  const intro = `${LEVELS[settings.level].tacticalNote} Fíjate en los dos colores.`;
+  if (state.questionIndex >= plan.guided.length && (plan.quick.length || plan.auto.length) && !state.quickDone?.tactica) {
+    return quickCheckView('tactica', plan, title, () => go('estrategia'));
+  }
+  return questionView(plan.guided, title, intro, () => queueMicrotask(() => {
+    if (plan.quick.length || plan.auto.length) render();
+    else go('estrategia');
+  }), plan.surprise);
 }
 
 function estrategia() {
-  const { plan } = state;
-  const title = `${stepNo('estrategia')}. ${plan.endgame ? 'Preguntas de finales' : 'Preguntas estratégicas'}`;
-  const intro = plan.endgame ? 'Sin damas en el tablero: cambian las preguntas.' : LEVELS[settings.level].strategicNote;
-  const tacticalHits = plan.tactical.filter((q) => state.answers[q.id]?.result.yes).length;
-  if (!state.forceStrategy && state.questionIndex === 0 && !state.answers[plan.strategic[0]?.id] && !plan.endgame && tacticalHits >= 3) {
+  const { plan: qplan } = state;
+  const title = `${stepNo('estrategia')}. ${qplan.endgame ? 'Preguntas de finales' : 'Preguntas estratégicas'}`;
+  const intro = qplan.endgame ? 'Sin damas en el tablero: cambian las preguntas.' : LEVELS[settings.level].strategicNote;
+  const plan = scaffoldPlan('estrategia', qplan.strategic);
+  const yesIds = qplan.tactical.filter((q) => state.answers[q.id]?.result.yes).map((q) => q.id);
+  const seenIds = yesIds.filter((id) => {
+    const a = state.answers[id];
+    return a.pointed ? a.pointed.found > 0 : a.user === true;
+  });
+  if (!state.forceStrategy && state.questionIndex === 0 && !state.answers[plan.guided[0]?.id] && !qplan.endgame && yesIds.length >= 3) {
+    // No decide por el jugador: explica por qué podría saltarse la estrategia y le deja elegir.
     return h('section', {},
       h('h2', {}, title),
-      h('p', {}, `Las preguntas tácticas han dado ${tacticalHits} "síes". Cuando la táctica funciona, la estrategia puede esperar.`),
+      h('p', {}, `El análisis responde SÍ a ${yesIds.length} preguntas tácticas: ${yesIds.map((id) => `«${questionText(id)}»`).join(', ')}. ${seenIds.length === yesIds.length ? 'Y tú las viste todas.' : `Tú viste ${seenIds.length} de ${yesIds.length}.`}`),
+      h('p', {}, 'Cuando hay tanta táctica, lo normal es que la jugada salga de ahí y la estrategia pueda esperar. Pero muchos «síes» no garantizan una combinación: si no la tienes clara, haz también las preguntas estratégicas. Tú decides.'),
       h('div', { class: 'actions' },
-        h('button', { class: 'primary', onClick: () => go(nextStep('estrategia')) }, 'Ir a decidir'),
-        h('button', { onClick: () => { state.forceStrategy = true; render(); } }, 'Hacer igualmente las preguntas'),
+        h('button', { onClick: () => go(nextStep('estrategia')) }, 'Ir a decidir'),
+        h('button', { onClick: () => { state.forceStrategy = true; render(); } }, 'Hacer las preguntas estratégicas'),
       ),
     );
   }
-  return questionView(plan.strategic, title, intro, () => queueMicrotask(() => go(nextStep('estrategia'))));
+  if (state.questionIndex >= plan.guided.length && (plan.quick.length || plan.auto.length) && !state.quickDone?.estrategia) {
+    return quickCheckView('estrategia', plan, title, () => go(nextStep('estrategia')));
+  }
+  return questionView(plan.guided, title, intro, () => queueMicrotask(() => {
+    if (plan.quick.length || plan.auto.length) render();
+    else go(nextStep('estrategia'));
+  }), plan.surprise);
+}
+
+/**
+ * Tarjeta «Chequeo rápido» de 30 s: las preguntas que ya dominas (rápidas,
+ * con respuesta) y las del chequeo automático (recordatorio: hazlas igualmente).
+ */
+function quickCheckView(group, plan, title, onDone) {
+  stopTimer();
+  state.quickStarted ??= {};
+  state.quickStarted[group] ??= Date.now();
+  const left = Math.max(0, 30 - Math.round((Date.now() - state.quickStarted[group]) / 1000));
+  const counter = h('span', { class: `quick-timer ${left <= 5 ? 'urgent' : ''}` }, `${left} s`);
+  timer = setInterval(() => {
+    const l = Math.max(0, 30 - Math.round((Date.now() - state.quickStarted[group]) / 1000));
+    counter.textContent = l ? `${l} s` : 'tiempo';
+    counter.classList.toggle('urgent', l <= 5);
+    if (!l) stopTimer();
+  }, 1000);
+  const pending = plan.quick.find((q) => !state.answers[q.id]);
+  const items = plan.quick.map((q) => {
+    const a = state.answers[q.id];
+    if (a) {
+      const ok = a.pointed ? a.pointed.correct : a.user === a.result.yes;
+      return h('li', { class: ok ? 'ok' : 'ko' }, `${ok ? '✔' : '✘'} ${q.text} `, h('span', { class: 'muted small' }, a.pointResult ? pointingSummary(a.pointResult) : a.result.findings.filter((f) => f.targets.length).map((f) => f.text).slice(0, 2).join('; ') || 'nada relevante'));
+    }
+    if (q !== pending) return h('li', { class: 'muted' }, q.text);
+    const askedAt = (state.questionAskedAt ??= {})[q.id] ??= Date.now();
+    const result = () => answerQuestion(q.id, state.puzzle.fen, state.puzzle.heroColor);
+    const pointing = settings.pointAnswers && POINTABLE.has(q.id);
+    if (pointing) {
+      if (!state.pointing) beginPointing();
+      return h('li', { class: 'active' }, h('strong', {}, q.text), pointingControls(() => {
+        const r = result();
+        const pr = endPointing(r.findings);
+        state.answers[q.id] = { user: pr.picks.length > 0, result: r, picks: pr.picks, pointed: { found: pr.found.length, required: pr.required, falseAlarms: pr.falseAlarms.length, ms: pr.ms, correct: pr.correct }, pointResult: pr, quick: true };
+        track('answer', { q: q.id, quick: true });
+        render();
+        showPointingResult(r.findings, pr);
+      }));
+    }
+    const pick = (user) => {
+      const r = result();
+      state.answers[q.id] = { user, result: r, ms: Date.now() - askedAt, quick: true };
+      track('answer', { q: q.id, user, quick: true });
+      render();
+      showFindings(r.findings.filter((f) => f.targets.length));
+    };
+    return h('li', { class: 'active' }, h('strong', {}, q.text), ' ',
+      h('button', { 'data-key': 's', onClick: () => pick(true) }, 'Sí'), ' ',
+      h('button', { 'data-key': 'n', onClick: () => pick(false) }, 'No'));
+  });
+  return h('section', {},
+    h('h2', {}, title),
+    h('div', { class: 'quick-card' },
+      h('div', { class: 'quick-head' }, h('strong', {}, 'Chequeo rápido'), counter),
+      h('p', { class: 'small muted' }, 'Preguntas que ya dominas: respóndelas en 30 s. No se eliminan: el método dice «hazlas igualmente».'),
+      plan.quick.length ? h('ul', { class: 'quick-list' }, items) : null,
+      plan.auto.length ? h('div', {}, h('p', { class: 'small' }, h('strong', {}, 'Chequeo automático: '), 'repásalas de un vistazo.'), h('ul', { class: 'auto-list' }, plan.auto.map((q) => h('li', {}, `☐ ${q.text}`)))) : null,
+      h('div', { class: 'actions' }, h('button', {
+        class: 'primary',
+        'data-key': 'enter',
+        disabled: Boolean(pending),
+        onClick: () => {
+          stopTimer();
+          state.quickDone = { ...state.quickDone, [group]: true };
+          track('quickDone', { group, ms: Date.now() - state.quickStarted[group] });
+          board.setMarks({});
+          onDone();
+        },
+      }, 'Chequeo hecho')),
+    ),
+    candidateReminder(),
+  );
 }
 
 // ------------------------------------------------------------- decisión
@@ -1957,10 +2071,28 @@ function finish(solved) {
     errors: state.mistakes.map((m) => m.kind).filter(Boolean),
     predictions: { ok: state.predictions.filter((p) => p.ok).length, total: state.predictions.length },
   }));
+  if (settings.scaffold && mode() === 'tiempo') updateLadder(key, keyUci);
   saveProgress(state.success);
   state.review = buildReview(puzzle);
   go('resumen');
   if (settings.engineOn) startEngine();
+}
+
+/** Ayuda que se retira: sube o baja de etapa las preguntas según este ejercicio. */
+function updateLadder(key, keyUci) {
+  const stats = storage.get('stats', emptyStats());
+  const closed = [...state.plan.tactical, ...state.plan.strategic].filter((q) => !q.open).map((q) => q.id);
+  const answers = {};
+  for (const [id, a] of Object.entries(state.answers)) {
+    if (!a || !closed.includes(id)) continue;
+    answers[id] = { ok: a.pointed ? a.pointed.correct : a.user !== null && a.user === a.result.yes, ms: a.pointed?.ms ?? a.ms ?? null, pointed: Boolean(a.pointed) };
+  }
+  // Solo cuentan las preguntas que de verdad respondían SÍ en la posición (como en «clave no vista»).
+  const yes = (id) => (state.answers[id]?.result ?? answerQuestion(id, state.puzzle.fen, state.puzzle.heroColor)).yes;
+  const keyQuestions = key ? [...new Set(key.tags.map((t) => t.q))].filter((q) => closed.includes(q) && yes(q)) : [];
+  const { scaffold, changes } = updateScaffold(stats.scaffold, { answers, keyQuestions, keyInCandidates: state.candidates.some((c) => c.uci === keyUci), closed, now: Date.now() });
+  storage.set('stats', { ...stats, scaffold });
+  state.ladderChanges = changes;
 }
 
 /**
@@ -2044,6 +2176,7 @@ function resumen() {
     themesView(),
     glanceCard(),
     processPanel(),
+    ladderNote(),
     mode() === 'tiempo'
       ? h('p', { class: solutionInCandidates ? 'ok' : 'ko' }, solutionInCandidates ? 'La jugada clave estaba entre tus candidatas. La técnica de candidatas funciona.' : 'La jugada clave no estaba entre tus candidatas. Repasa: ¿qué pregunta te habría llevado a ella?')
       : h('p', { class: state.intuition?.uci === key.uci ? 'ok' : 'ko' }, state.intuition?.uci === key.uci ? 'Tu intuición acertó.' : `Tu intuición fue ${state.intuition?.san ?? '—'}. Con más tiempo, el proceso completo ayuda a corregirla.`),
@@ -2433,6 +2566,16 @@ function remate() {
   );
 }
 
+/** Cambios de etapa de la ayuda que se retira, con su explicación. */
+function ladderNote() {
+  const changes = state.ladderChanges ?? [];
+  if (!changes.length) return null;
+  return h('div', { class: 'ladder-note' }, h('strong', {}, 'Ayuda que se retira'), h('ul', {}, changes.map((c) => h('li', { class: c.reason === 'promote' ? 'ok' : 'ko' },
+    c.reason === 'promote'
+      ? `«${questionText(c.id)}» sube a ${STAGES[c.to].label.toLowerCase()} (${STAGES[c.to].text}): la has acertado señalando y rápido.`
+      : `«${questionText(c.id)}» baja a ${STAGES[c.to].label.toLowerCase()}: la jugada clave respondía SÍ a esta pregunta y no estaba entre tus candidatas. Durante un tiempo vuelve a hacerla con calma.`))));
+}
+
 /** "Tu recorrido": segundos por fase, dónde apareció la clave y aviso de fijación. */
 function processPanel() {
   const tl = state.timeline;
@@ -2506,9 +2649,12 @@ function bar(value, tone) {
 }
 
 function statsView() {
-  const { rows, hardest, exercises, candidates, blindSpots: blind, hints } = summarize(storage.get('stats', emptyStats()));
+  const raw = storage.get('stats', emptyStats());
+  const summary = summarize(raw);
+  const { rows, hardest, exercises, candidates, blindSpots: blind, hints } = summary;
+  const extra = [intuitionStats(summary.intuition), errorStats(summary), keySourceStats(summary), predictionStats(summary.predictions), ladderStats(raw), burstStats(raw), mixedStats(raw)].filter(Boolean);
   if (!rows.length) {
-    return h('div', {}, h('p', {}, 'Todavía no hay datos. Termina algún ejercicio en el modo "con tiempo" respondiendo a las preguntas.'));
+    return h('div', {}, h('p', {}, 'Todavía no hay datos por pregunta. Termina algún ejercicio en el modo "con tiempo" respondiendo a las preguntas.'), ...extra);
   }
   const closed = rows.filter((r) => !r.open);
   const open = rows.filter((r) => r.open);
@@ -2545,6 +2691,7 @@ function statsView() {
         h('th', { title: 'Respondiste que sí y no había nada' }, 'Falsa alarma'),
         h('th', {}, 'No lo sé'),
         h('th', { title: 'Ejercicios en los que la pregunta llevaba a la jugada clave y no respondiste que sí' }, 'Clave no vista'),
+        h('th', { title: 'Respondiendo señalando: proporción encontrada y tiempo medio' }, 'Señalando'),
       )),
       h('tbody', {}, closed.map((r) => h('tr', { class: hardest?.id === r.id ? 'hardest' : '' },
         h('td', {}, r.text, h('div', { class: 'muted small' }, r.group + (r.enough ? '' : ' · pocos datos'))),
@@ -2554,13 +2701,82 @@ function statsView() {
         h('td', { class: 'num' }, String(r.falseAlarm)),
         h('td', { class: 'num' }, String(r.unsure)),
         h('td', { class: 'num' }, r.key ? `${r.keyMissed}/${r.key}` : '—'),
+        h('td', { class: 'num', title: 'Respondiendo señalando: proporción de lo que había que encontrar y tiempo medio' }, r.foundRate != null ? `${pct(r.foundRate)} · ${Math.round(r.avgMs / 1000)} s` : '—'),
       ))),
     )),
     open.length ? h('h3', {}, 'Preguntas abiertas') : null,
     open.length
       ? h('ul', { class: 'open-stats' }, open.map((r) => h('li', {}, `${r.text} `, h('span', { class: 'muted small' }, `pensada ${times(r.asked)}, con idea escrita ${times(r.withIdea)}${r.key ? ` · señalaba la clave en ${r.key}` : ''}`))))
       : null,
+    ...extra,
   );
+}
+
+/** Ráfagas de fluidez: la última de cada pregunta. */
+function burstStats() {
+  return null;
+}
+
+/** Modo «¿hay táctica o toca mejorar?». */
+function mixedStats() {
+  return null;
+}
+
+/** «Tu intuición»: acierto por nivel de seguridad y puntuación de Brier. */
+function intuitionStats(sum) {
+  if (!sum) return null;
+  return h('div', { class: 'stats-block' },
+    h('h3', {}, 'Tu intuición'),
+    h('p', { class: 'small' }, `${sum.n} ${sum.n === 1 ? 'golpe de vista' : 'golpes de vista'} · acierto ${pct(sum.rate)} · Brier ${sum.brier.toFixed(3)} `, h('span', { class: 'muted' }, '(0 es perfecto; 0,25 es como decir siempre 50 %)')),
+    h('table', { class: 'stats-table' },
+      h('thead', {}, h('tr', {}, h('th', {}, 'Seguridad'), h('th', {}, 'Prometía'), h('th', {}, 'Acierto'), h('th', {}, 'Veces'))),
+      h('tbody', {}, sum.rows.map((r) => h('tr', {},
+        h('td', {}, r.label), h('td', { class: 'num' }, pct(r.expected)),
+        h('td', { class: 'num' }, r.rate == null ? '—' : pct(r.rate), r.rate == null ? null : bar(r.rate, Math.abs(r.rate - r.expected) <= 0.15 ? 'good' : 'bad')),
+        h('td', { class: 'num' }, String(r.n)))))),
+    sum.diagnosis ? h('p', { class: 'small' }, sum.diagnosis) : null,
+    Object.keys(sum.cases ?? {}).length ? h('p', { class: 'small muted' }, Object.entries(GLANCE_CASES).map(([id, c]) => `${c.label}: ${sum.cases[id] ?? 0}`).join(' · ')) : null,
+  );
+}
+
+/** Tipos de fallo de tus jugadas con el consejo del más frecuente. */
+function errorStats(sum) {
+  if (!sum.errors.length) return null;
+  return h('div', { class: 'stats-block' },
+    h('h3', {}, 'Por qué fallan tus jugadas'),
+    h('p', { class: 'callout' }, errorAdvice(sum.errors)),
+    h('ul', { class: 'blind-stats' }, sum.errors.map((e) => h('li', {}, h('span', { class: `badge kind-${e.kind}` }, ERROR_INFO[e.kind].label), ` ${e.n} (${pct(e.rate)})`, bar(e.rate, 'bad')))),
+  );
+}
+
+/** De dónde sale la jugada clave: intuición, candidatas, preguntas o nunca. */
+function keySourceStats(sum) {
+  if (!sum.keySources.length) return null;
+  const names = { intuicion: 'Intuición (golpe de vista)', candidatas: 'Al apuntar candidatas', preguntas: 'Gracias a las preguntas', nunca: 'Nunca apareció' };
+  return h('div', { class: 'stats-block' },
+    h('h3', {}, 'De dónde sale la jugada clave'),
+    h('ul', { class: 'blind-stats' }, sum.keySources.map((k) => h('li', {}, `${names[k.source]}: `, h('strong', {}, pct(k.rate)), ` (${k.n})`, bar(k.rate, k.source === 'nunca' ? 'bad' : 'good')))),
+  );
+}
+
+function predictionStats(p) {
+  if (!p?.total) return null;
+  return h('div', { class: 'stats-block' }, h('h3', {}, 'Respuestas del rival'), h('p', { class: 'small' }, `Has previsto ${p.ok} de ${p.total} respuestas del rival (${pct(p.ok / p.total)}).`));
+}
+
+/** La escalera de la ayuda que se retira: en qué etapa está cada pregunta. */
+function ladderStats(raw) {
+  const ids = ALL_QUESTIONS.filter((q) => !q.open).map((q) => q.id);
+  const rows = ladder(raw.scaffold, ids).filter((r) => r.stage > 0 || r.pointed > 0);
+  if (!rows.length) return h('div', { class: 'stats-block' }, h('h3', {}, 'Ayuda que se retira'), h('p', { class: 'small muted' }, 'Responde señalando para que tus preguntas dominadas pasen a un chequeo rápido: hace falta el 85 % de las 10 últimas y poco tiempo.'));
+  return h('div', { class: 'stats-block' },
+    h('h3', {}, 'Ayuda que se retira'),
+    h('p', { class: 'small muted' }, `Sube de etapa con el ${Math.round(PROMOTION.accuracy * 100)} % de las ${PROMOTION.window} últimas respuestas señalando y en menos de ${PROMOTION.maxMs[0] / 1000} s (después ${PROMOTION.maxMs[1] / 1000} s). Baja si la clave respondía SÍ y no estaba entre tus candidatas.`),
+    h('ul', { class: 'ladder' }, rows.map((r) => h('li', {},
+      h('span', {}, ALL_QUESTIONS.find((q) => q.id === r.id).text),
+      h('span', { class: 'steps' }, STAGES.map((st) => h('span', { class: `rung ${st.id <= r.stage ? 'on' : ''}`, title: st.text }, st.label))),
+      h('span', { class: 'muted small' }, r.pointed ? `${r.pointed}/${PROMOTION.window} señalando · ${pct(r.accuracy)}${r.avgMs != null ? ` · ${Math.round(r.avgMs / 1000)} s` : ''}` : ''))),
+    ));
 }
 
 function openStats() {
@@ -2571,7 +2787,7 @@ function openStats() {
   }
   const close = () => dialog.close();
   dialog.replaceChildren(
-    h('div', { class: 'dialog-head' }, h('h2', {}, 'Estadísticas por pregunta'), h('button', { class: 'link', onClick: close, 'aria-label': 'Cerrar' }, 'Cerrar')),
+    h('div', { class: 'dialog-head' }, h('h2', {}, 'Estadísticas'), h('button', { class: 'link', onClick: close, 'aria-label': 'Cerrar' }, 'Cerrar')),
     statsView(),
     h('div', { class: 'actions' },
       h('button', {
