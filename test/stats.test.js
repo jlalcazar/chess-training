@@ -79,3 +79,42 @@ test('estadísticas antiguas sin puntos ciegos se siguen leyendo', () => {
   const s = recordExercise(old, { answers: {}, keyInCandidates: true, blind: ['caballo'] });
   assert.equal(s.blindSpots.caballo.seen, 1);
 });
+
+test('responder señalando: decir siempre que sí ya no puntúa como acierto', async () => {
+  const { emptyStats, recordExercise, summarize } = await import('../src/stats.js');
+  const answers = {
+    amenazadas: { user: true, result: { yes: true }, pointed: { found: 1, required: 3, falseAlarms: 0, ms: 9000, correct: false } },
+    mate: { user: true, result: { yes: true }, pointed: { found: 1, required: 1, falseAlarms: 0, ms: 4000, correct: true } },
+  };
+  const s = recordExercise(emptyStats(), { answers, keyQuestions: ['amenazadas'] });
+  assert.equal(s.questions.amenazadas.correct, 0);
+  assert.equal(s.questions.amenazadas.missed, 1);
+  assert.equal(s.questions.amenazadas.keyMissed, 1, 'señalar solo una de tres no cuenta como ver la clave');
+  assert.equal(s.questions.mate.correct, 1);
+  assert.deepEqual(s.questions.mate.recent, [{ ok: true, ms: 4000, pointed: true }]);
+  const row = summarize(s, { minAnswers: 1 }).rows.find((r) => r.id === 'amenazadas');
+  assert.ok(Math.abs(row.foundRate - 1 / 3) < 1e-9);
+  assert.equal(row.avgMs, 9000);
+});
+
+test('estadísticas nuevas: intuición, tipos de fallo, origen de la clave y predicciones', async () => {
+  const { emptyStats, recordExercise, summarize } = await import('../src/stats.js');
+  let s = recordExercise(emptyStats(), { glance: { confidence: 'segura', correct: true, kase: 'acertoJugo' }, errors: ['orden', 'orden', 'colgada'], keySource: 'intuicion', predictions: { ok: 2, total: 3 } });
+  s = recordExercise(s, { errors: ['otra'], keySource: 'nunca' });
+  const sum = summarize(s);
+  assert.equal(sum.intuition.n, 1);
+  assert.equal(sum.errors[0].kind, 'orden');
+  assert.equal(sum.errors[0].rate, 0.5);
+  assert.equal(sum.keySources.find((k) => k.source === 'intuicion').rate, 0.5);
+  assert.deepEqual(sum.predictions, { total: 3, ok: 2 });
+});
+
+test('estadísticas antiguas (sin bloques nuevos) siguen funcionando', async () => {
+  const { recordExercise, summarize } = await import('../src/stats.js');
+  const old = { version: 1, exercises: 2, questions: { mate: { asked: 2, correct: 2, missed: 0, falseAlarm: 0, unsure: 0, withIdea: 0, key: 0, keyMissed: 0 } }, candidates: { asked: 2, keyFound: 1 } };
+  const sum = summarize(old);
+  assert.equal(sum.intuition, null);
+  assert.deepEqual(sum.errors, []);
+  const next = recordExercise(old, { answers: { mate: { user: false, result: { yes: false } } } });
+  assert.equal(next.questions.mate.correct, 3);
+});

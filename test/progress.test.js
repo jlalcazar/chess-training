@@ -185,3 +185,17 @@ test('todos los temas con grupo propio tienen nombre en español', async () => {
   const keys = ['oneMove', 'short', 'long', 'veryLong', 'crushing', 'advantage', 'equality', 'master', 'masterVsMaster', 'superGM', 'playerGames', 'opening', 'middlegame', 'endgame'];
   for (const k of keys) assert.notEqual(themeName(k), k, k);
 });
+
+test('el intento fallado guarda qué paso falló (para recordarlo en el repaso)', () => {
+  const detail = { questions: ['amenazadas'], blind: ['sacrificio'], kinds: ['orden'], keyMissed: true };
+  const p = recordAttempt(emptyProgress(), puzzle('A', ['fork']), { success: false, mistakes: 1, now: T0, detail });
+  assert.deepEqual(p.puzzles.A.attempts[0].detail, detail);
+  const ok = recordAttempt(p, puzzle('A', ['fork']), { success: true, now: T0 + 86400000 });
+  assert.equal(ok.puzzles.A.attempts[1].detail, undefined, 'los aciertos no llevan detalle');
+});
+
+test('los temas de tus partidas tienen su grupo', () => {
+  assert.equal(themeGroup('misPartidas'), 'propias');
+  assert.equal(themeGroup('propiaProfilaxis'), 'propias');
+  assert.equal(themeGroup('fork'), 'tactica');
+});

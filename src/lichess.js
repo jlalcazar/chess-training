@@ -78,6 +78,16 @@ const EXTRA_THEME_NAMES = {
   triangleMate: 'Mate del triángulo',
   attackingF2F7: 'Ataque a f2/f7',
   collinearMove: 'Jugada colineal',
+  // Ejercicios de tus propias partidas (selfgames.js).
+  misPartidas: 'De tus partidas',
+  propiaImprecision: 'Tus imprecisiones',
+  propiaError: 'Tus errores',
+  propiaGrave: 'Tus errores graves',
+  propiaPeones: 'Juego de peones',
+  propiaDamas: 'Cambio de damas y final',
+  propiaCambios: 'Cambios de piezas',
+  propiaProfilaxis: 'Pensamiento profiláctico',
+  propiaActivacion: 'Activación de piezas',
 };
 
 export const themeName = (t) => THEMES[t] ?? EXTRA_THEME_NAMES[t] ?? t;

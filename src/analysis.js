@@ -45,7 +45,61 @@ export function allPieces(chess) {
 
 const defenders = (chess, sq, color) => chess.attackers(sq, color);
 
-/** Piezas atacadas por el rival que están indefensas o atacadas por algo de menor valor. */
+// ------------------------------------------- SEE (Static Exchange Evaluation)
+
+/** La pieza de menos valor de `color` que ataca `sq` (el rey, la última). */
+function cheapestAttacker(chess, sq, color) {
+  let best = null;
+  for (const from of chess.attackers(sq, color)) {
+    const p = chess.get(from);
+    if (!best || VALUES[p.type] < VALUES[best.type]) best = { ...p, from };
+  }
+  return best;
+}
+
+/**
+ * Cuenta el cambio en `square` si `color` empieza a capturar (algoritmo "swap"):
+ * cada bando captura siempre con su pieza de menos valor, las piezas largas que
+ * quedan detrás entran en juego (rayos X) y cada bando puede pararse cuando ya
+ * no le conviene seguir. `from` fuerza la primera pieza que captura.
+ * Devuelve el material que gana `color` (0 si no le conviene capturar).
+ * No tiene en cuenta clavadas ni jaques: es un recuento estático.
+ */
+export function see(chess, square, color, { from } = {}) {
+  const target = chess.get(square);
+  if (!target || target.color === color) return 0;
+  const board = new Chess(chess.fen(), { skipValidation: true });
+  const gain = [];
+  let depth = 0;
+  let side = color;
+  let attacker = from ? { ...board.get(from), from } : cheapestAttacker(board, square, side);
+  if (!attacker?.type) return 0;
+  gain[0] = VALUES[target.type];
+  for (;;) {
+    // El rey solo puede capturar si la casilla no queda atacada.
+    if (attacker.type === 'k' && board.attackers(square, other(side)).filter((s) => s !== attacker.from).length) {
+      if (depth === 0) return 0;
+      break;
+    }
+    board.remove(attacker.from);
+    board.remove(square);
+    board.put({ type: attacker.type, color: side }, square);
+    depth++;
+    gain[depth] = VALUES[attacker.type] - gain[depth - 1];
+    side = other(side);
+    attacker = cheapestAttacker(board, square, side);
+    // Poda: ni continuando ni parando puede mejorar el resultado.
+    if (!attacker || Math.max(-gain[depth - 1], gain[depth]) < 0) break;
+  }
+  while (--depth > 0) gain[depth - 1] = -Math.max(-gain[depth - 1], gain[depth]);
+  // Con la primera captura forzada (`from`) el resultado puede ser negativo.
+  return from ? gain[0] : Math.max(0, gain[0]);
+}
+
+/** SEE de una captura concreta (puede ser negativa: la captura pierde material). */
+export const seeMove = (chess, move) => see(chess, move.to, chess.get(move.from).color, { from: move.from });
+
+/** Piezas que el rival gana en el cambio (SEE > 0), o el rey en jaque. */
 export function threatenedPieces(chess, color) {
   const out = [];
   for (const p of allPieces(chess)) {
@@ -56,11 +110,16 @@ export function threatenedPieces(chess, color) {
       out.push({ ...p, attackers, reason: 'está en jaque' });
       continue;
     }
+    const loss = see(chess, p.square, other(color));
+    if (loss <= 0) continue;
     const defs = defenders(chess, p.square, color);
     const minAttacker = Math.min(...attackers.map((s) => VALUES[chess.get(s).type]));
-    if (!defs.length) out.push({ ...p, attackers, reason: 'atacada y sin defensa' });
-    else if (minAttacker < VALUES[p.type]) out.push({ ...p, attackers, reason: 'atacada por una pieza de menos valor' });
-    else if (attackers.length > defs.length) out.push({ ...p, attackers, reason: 'más atacantes que defensores' });
+    const reason = !defs.length
+      ? 'atacada y sin defensa'
+      : minAttacker < VALUES[p.type]
+        ? 'atacada por una pieza de menos valor'
+        : 'pierde material en el cambio';
+    out.push({ ...p, attackers, reason, see: loss });
   }
   return out;
 }
@@ -194,24 +253,29 @@ export function evaluateMove(fen, move) {
 
   if (m.san.endsWith('#')) tags.push({ q: 'mate', text: 'da jaque mate' });
   else if (m.san.includes('+')) tags.push({ q: 'mate', text: 'da jaque' });
+  let exchange = null;
   if (m.captured) {
     const before = load(fen);
     const wasDefended = defenders(before, m.to, enemy).length > 0;
     const fem = ['r', 'q'].includes(m.captured);
+    // Al paso la casilla de destino está vacía: el recuento no aplica.
+    exchange = m.isEnPassant?.() ? VALUES.p : seeMove(before, m);
     if (!wasDefended) tags.push({ q: 'desprotegidas', text: `captura ${fem ? 'la' : 'el'} ${PIECE_NAMES[m.captured]} ${fem ? 'indefensa' : 'indefenso'}` });
-    else if (VALUES[m.captured] > VALUES[m.piece]) tags.push({ q: 'amenazadas', text: `gana material: ${PIECE_NAMES[m.piece]} por ${PIECE_NAMES[m.captured]}` });
-    else tags.push({ q: 'amenazadas', text: `captura ${PIECE_NAMES[m.captured]}` });
+    else if (exchange > 0) tags.push({ q: 'amenazadas', text: VALUES[m.captured] > VALUES[m.piece] ? `gana material: ${PIECE_NAMES[m.piece]} por ${PIECE_NAMES[m.captured]}` : `gana material en el cambio (+${exchange})` });
+    else if (exchange === 0) tags.push({ q: 'amenazadas', text: `cambia: ${PIECE_NAMES[m.piece]} por ${PIECE_NAMES[m.captured]}` });
+    else warnings.push(`la captura pierde material en el cambio (${exchange})`);
   }
   if (m.promotion) tags.push({ q: 'coronar', text: `corona ${PIECE_NAMES[m.promotion]}` });
 
   // Lo que ataca ahora la pieza movida (como si volviera a mover el mismo bando).
   const mine = load(withTurn(after, color));
   if (mine && !m.san.endsWith('#')) {
+    // Amenaza de verdad: capturar con la pieza movida gana material en el cambio.
     const targets = mine
       .moves({ verbose: true, square: m.to })
-      .filter((x) => x.captured)
-      .map((x) => ({ ...mine.get(x.to), square: x.to }))
-      .filter((p) => p.type !== 'k' && (defenders(mine, p.square, enemy).length === 0 || VALUES[p.type] > VALUES[m.piece]));
+      .filter((x) => x.captured && x.captured !== 'k')
+      .filter((x) => see(mine, x.to, color, { from: m.to }) > 0)
+      .map((x) => ({ ...mine.get(x.to), square: x.to }));
     const checks = m.san.includes('+');
     if (targets.length + (checks ? 1 : 0) >= 2) tags.push({ q: 'geometria', text: `ataque doble (${targets.map(pieceLabel).join(', ')}${checks ? ', rey' : ''})` });
     else if (targets.length) tags.push({ q: 'amenazadas', text: `amenaza ${pieceLabel(targets[0])}` });
@@ -234,7 +298,7 @@ export function evaluateMove(fen, move) {
   }
 
   const yes = new Set(tags.map((t) => t.q));
-  return { move: m, san: m.san, uci: m.from + m.to + (m.promotion ?? ''), tags, warnings, yesCount: yes.size, mate: m.san.endsWith('#') };
+  return { move: m, san: m.san, uci: m.from + m.to + (m.promotion ?? ''), tags, warnings, yesCount: yes.size, mate: m.san.endsWith('#'), exchange };
 }
 
 // ----------------------------- Estrategia -----------------------------
@@ -310,6 +374,224 @@ export function material(chess) {
 export function isEndgame(chess) {
   const m = material(chess);
   return m.queens === 0 || (m.nonPawn.w <= 13 && m.nonPawn.b <= 13);
+}
+
+// --------------------------------------- ¿Qué ha cambiado con la jugada?
+
+/** Casillas con pieza que ataca la pieza de `sq` (según chess.attackers). */
+function attackedBy(chess, sq) {
+  const p = chess.get(sq);
+  if (!p) return [];
+  return allPieces(chess).filter((x) => x.square !== sq && chess.attackers(x.square, p.color).includes(sq)).map((x) => x.square);
+}
+
+/**
+ * Qué cambió con la última jugada (la del rival): qué ataca ahora la pieza
+ * que se movió, qué dejó de defender, qué líneas abrió al irse (ataques a la
+ * descubierta, de cualquiera de los dos bandos) y qué líneas cortó al llegar.
+ */
+export function lastMoveDiff(fenBefore, fen, lastMove) {
+  const before = load(fenBefore);
+  const after = load(fen);
+  if (!before || !after || !lastMove) return null;
+  const { from, to } = lastMove;
+  const moved = after.get(to);
+  if (!moved) return null;
+  const mover = moved.color;
+  const victim = other(mover);
+  const piece = (chess, sq) => ({ ...chess.get(sq), square: sq });
+  const captured = before.get(to) && before.get(to).color !== mover ? piece(before, to) : null;
+
+  // Ataca ahora (piezas del otro bando que antes no atacaba desde `from`).
+  const nowAttacked = attackedBy(after, to).filter((sq) => after.get(sq).color === victim);
+  const wasAttacked = new Set(attackedBy(before, from));
+  // `wins`: capturarla ganaría material en el cambio (si no, es un ataque sin peligro inmediato).
+  const attacks = nowAttacked.filter((sq) => !wasAttacked.has(sq)).map((sq) => ({ ...piece(after, sq), wins: after.get(sq).type === 'k' || see(after, sq, mover) > 0 }));
+
+  // Dejó de defender: piezas propias que defendía desde `from` y ya no desde `to`.
+  const defendedBefore = attackedBy(before, from).filter((sq) => before.get(sq).color === mover);
+  const defendsNow = new Set(attackedBy(after, to));
+  const undefended = defendedBefore
+    .filter((sq) => !defendsNow.has(sq) && after.get(sq)?.color === mover)
+    .map((sq) => ({ ...piece(after, sq), stillDefended: after.attackers(sq, mover).length > 0 }));
+
+  // Líneas abiertas y cortadas: piezas largas (de los dos bandos) que no se han movido.
+  const opened = [];
+  const blocked = [];
+  for (const s of allPieces(after)) {
+    if (!['b', 'r', 'q'].includes(s.type) || s.square === to) continue;
+    const prev = before.get(s.square);
+    if (!prev || prev.type !== s.type || prev.color !== s.color) continue;
+    const nowT = new Set(attackedBy(after, s.square).filter((sq) => after.get(sq).color !== s.color));
+    const prevT = new Set(attackedBy(before, s.square).filter((sq) => before.get(sq)?.color !== s.color && sq !== to));
+    for (const sq of nowT) if (!prevT.has(sq) && sq !== to && between(s.square, sq).includes(from)) opened.push({ by: piece(after, s.square), target: piece(after, sq) });
+    for (const sq of prevT) if (!nowT.has(sq) && after.get(sq) && between(s.square, sq).includes(to)) blocked.push({ by: piece(after, s.square), target: piece(after, sq) });
+  }
+  return { piece: { ...moved, square: to }, from, to, captured, check: after.inCheck(), attacks, undefended, opened, blocked };
+}
+
+/** Casillas estrictamente entre dos casillas en línea recta (vacío si no están alineadas). */
+export function between(a, b) {
+  const [fa, ra] = coords(a);
+  const [fb, rb] = coords(b);
+  const df = Math.sign(fb - fa);
+  const dr = Math.sign(rb - ra);
+  if (!(fa === fb || ra === rb || Math.abs(fb - fa) === Math.abs(rb - ra))) return [];
+  const out = [];
+  for (let f = fa + df, r = ra + dr; f !== fb || r !== rb; f += df, r += dr) out.push(toSquare(f, r));
+  return out;
+}
+
+// ------------------------------------------ Mapa de casillas y rutas
+
+const relRank = (sq, color) => (color === 'w' ? Number(sq[1]) : 9 - Number(sq[1]));
+const ALL_SQUARES = [...FILES].flatMap((f) => [1, 2, 3, 4, 5, 6, 7, 8].map((r) => f + r));
+
+/**
+ * Quién controla cada casilla: número de atacantes de cada bando y el dueño
+ * ('w', 'b', 'contested' o null). Con empate de atacantes manda quien ataca
+ * con la pieza de menos valor (un peón controla aunque le ataquen dos piezas).
+ */
+export function squareControl(chess) {
+  const out = {};
+  for (const sq of ALL_SQUARES) {
+    const w = chess.attackers(sq, 'w');
+    const b = chess.attackers(sq, 'b');
+    const cheapest = (list) => Math.min(...list.map((s) => VALUES[chess.get(s).type]));
+    let owner = null;
+    if (w.length || b.length) {
+      if (!b.length) owner = 'w';
+      else if (!w.length) owner = 'b';
+      else if (cheapest(w) < cheapest(b)) owner = 'w';
+      else if (cheapest(b) < cheapest(w)) owner = 'b';
+      else owner = w.length > b.length ? 'w' : b.length > w.length ? 'b' : 'contested';
+    }
+    out[sq] = { w: w.length, b: b.length, owner };
+  }
+  return out;
+}
+
+/** ¿Puede algún peón de `color` llegar a defender `sq` (está en una columna vecina y por detrás)? */
+function pawnCanCover(chess, sq, color) {
+  const [f] = coords(sq);
+  const r = relRank(sq, color);
+  return allPieces(chess).some((p) => p.type === 'p' && p.color === color && Math.abs(coords(p.square)[0] - f) === 1 && relRank(p.square, color) < r);
+}
+
+/**
+ * Agujeros de `color`: casillas de su campo y del centro (filas 3 a 5 vistas
+ * desde su lado) que ningún peón propio puede ya defender. Primero las
+ * centrales y las cercanas al rey.
+ */
+export function holes(chess, color) {
+  if (!allPieces(chess).some((p) => p.type === 'p' && p.color === color)) return [];
+  const king = allPieces(chess).find((p) => p.type === 'k' && p.color === color);
+  const [kf] = king ? coords(king.square) : [4];
+  const weight = (sq) => {
+    const [f] = coords(sq);
+    return Math.abs(f - 3.5) + Math.min(Math.abs(f - kf), 3) - (chess.get(sq)?.color === other(color) ? 2 : 0);
+  };
+  return ALL_SQUARES.filter((sq) => {
+    const r = relRank(sq, color);
+    if (r < 3 || r > 5) return false;
+    const p = chess.get(sq);
+    if (p?.type === 'p' && p.color === color) return false;
+    return !pawnCanCover(chess, sq, color);
+  }).sort((a, b) => weight(a) - weight(b));
+}
+
+/**
+ * Puestos avanzados de `color`: casillas en las filas 4 a 6 (desde su lado)
+ * defendidas por un peón propio que ningún peón rival puede atacar.
+ */
+export function outposts(chess, color) {
+  return ALL_SQUARES.filter((sq) => {
+    const r = relRank(sq, color);
+    if (r < 4 || r > 6) return false;
+    const p = chess.get(sq);
+    if (p && (p.type === 'p' || p.color !== color)) return false;
+    const pawnDefended = chess.attackers(sq, color).some((s) => chess.get(s).type === 'p');
+    return pawnDefended && !pawnCanCover(chess, sq, other(color));
+  });
+}
+
+const STEPS = { n: KNIGHT_JUMPS, b: DIAGONAL, r: ORTHOGONAL, q: [...DIAGONAL, ...ORTHOGONAL], k: [...DIAGONAL, ...ORTHOGONAL] };
+
+/** Casillas a las que iría una pieza desde `from` sin mover nada más (pseudolegal). */
+function pieceSteps(chess, from, piece) {
+  const [f, r] = coords(from);
+  const out = [];
+  const slides = ['b', 'r', 'q'].includes(piece.type);
+  for (const [df, dr] of STEPS[piece.type] ?? []) {
+    for (let i = 1; ; i++) {
+      const sq = toSquare(f + df * i, r + dr * i);
+      if (!sq) break;
+      const p = chess.get(sq);
+      if (p && p.color === piece.color) break;
+      out.push({ sq, capture: Boolean(p) });
+      if (p || !slides) break;
+    }
+  }
+  return out;
+}
+
+/** ¿Es peligrosa la casilla para esta pieza? Atacada por un peón, por algo de menos valor o sin defensa. */
+function dangerousFor(chess, sq, piece) {
+  const enemy = other(piece.color);
+  const attackers = chess.attackers(sq, enemy);
+  if (!attackers.length) return null;
+  const cheapest = Math.min(...attackers.map((s) => VALUES[chess.get(s).type]));
+  if (cheapest < VALUES[piece.type]) return cheapest === 1 ? 'la ataca un peón' : 'la ataca una pieza de menos valor';
+  if (!chess.attackers(sq, piece.color).length) return 'está atacada y sin defensa';
+  return null;
+}
+
+/**
+ * Rutas de una pieza moviendo solo esa pieza (búsqueda en anchura hasta
+ * `maxMoves` jugadas). Para cada casilla alcanzable: el camino, el número de
+ * tiempos y las casillas peligrosas por las que pasa. `best` son las 3 mejores
+ * casillas (actividad desde allí, centralización, puestos avanzados y
+ * ataques a piezas rivales, menos el peligro).
+ */
+export function pieceRoutes(fen, from, { maxMoves = 3, to } = {}) {
+  const chess = load(fen);
+  const piece = chess?.get(from);
+  if (!piece || !STEPS[piece.type]) return { routes: {}, best: [], to: null };
+  // Sin la pieza en su casilla, para que no se bloquee a sí misma.
+  const board = new Chess(fen, { skipValidation: true });
+  board.remove(from);
+  const routes = { [from]: { path: [from], moves: 0, dangers: [] } };
+  let frontier = [from];
+  for (let d = 1; d <= maxMoves && frontier.length; d++) {
+    const next = [];
+    for (const sq of frontier) {
+      for (const step of pieceSteps(board, sq, piece)) {
+        if (routes[step.sq]) continue;
+        const danger = dangerousFor(board, step.sq, piece);
+        const prev = routes[sq];
+        routes[step.sq] = { path: [...prev.path, step.sq], moves: d, dangers: danger ? [...prev.dangers, { sq: step.sq, why: danger }] : prev.dangers, capture: step.capture };
+        // Una captura termina la ruta: más allá el tablero ya no es el mismo.
+        if (!step.capture) next.push(step.sq);
+      }
+    }
+    frontier = next;
+  }
+  const outs = new Set(outposts(chess, piece.color));
+  const score = (sq) => {
+    const r = routes[sq];
+    const [f, rk] = coords(sq);
+    const mobility = pieceSteps(board, sq, piece).length;
+    const center = 3.5 - Math.max(Math.abs(f - 3.5), Math.abs(rk - 3.5));
+    const hits = pieceSteps(board, sq, piece).filter((s) => s.capture && board.get(s.sq).color !== piece.color).length;
+    const ownDanger = dangerousFor(board, sq, piece) ? 4 : 0;
+    return mobility + center + (outs.has(sq) ? 3 : 0) + hits * 1.5 - ownDanger - r.moves * 0.5 - r.dangers.length;
+  };
+  const best = Object.keys(routes)
+    .filter((sq) => sq !== from && !routes[sq].capture)
+    .map((sq) => ({ sq, ...routes[sq], score: score(sq), outpost: outs.has(sq) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3);
+  return { routes, best, to: to ? routes[to] ?? null : null, piece: { ...piece, square: from } };
 }
 
 /** Las jugadas más peligrosas del rival si le tocara mover ahora. */
@@ -510,14 +792,13 @@ export function describeIdea(idea, { moves = true } = {}) {
 
 /**
  * Las jugadas "forzantes" de quien mueve en `fen`: jaques, capturas y amenazas
- * (la pieza movida ataca algo indefenso o de más valor). Es el barrido que
+ * (la pieza movida ataca algo que ganaría en el cambio). Es el barrido que
  * conviene hacer antes de cerrar la lista de candidatas.
  */
 export function forcingSweep(fen) {
   const chess = load(fen);
   if (!chess) return { checks: [], captures: [], threats: [] };
   const color = chess.turn();
-  const enemy = other(color);
   const checks = [];
   const captures = [];
   const threats = [];
@@ -532,7 +813,7 @@ export function forcingSweep(fen) {
     const hits = after
       .moves({ verbose: true, square: m.to })
       .filter((x) => x.captured && x.captured !== 'k')
-      .filter((x) => VALUES[x.captured] > VALUES[m.piece] || after.attackers(x.to, enemy).length === 0);
+      .filter((x) => see(after, x.to, color, { from: m.to }) > 0);
     if (hits.length) threats.push({ ...m, targets: hits.map((x) => x.to) });
   }
   return { checks, captures, threats };
