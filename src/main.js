@@ -612,7 +612,7 @@ function candidateReminder() {
   return h('details', { class: 'reminder' },
     h('summary', {}, `¿Te sugiere una candidata nueva? (${state.candidates.length}/${MAX_CANDIDATES})`),
     h('p', { class: 'small' }, full
-      ? `Ya tienes ${MAX_CANDIDATES} candidatas, el máximo. En el paso de decisión las compararás.`
+      ? `Ya tienes ${MAX_CANDIDATES} candidatas, el máximo. Para apuntar otra, en el paso de decisión quita una y pulsa "Añadir candidata".`
       : 'Recuérdala: en el paso de decisión pulsa "Añadir candidata" y muévela en el tablero. Se apunta en la tabla, no se juega.'),
     candidateList(false),
   );
@@ -643,13 +643,16 @@ function estrategia() {
 // ------------------------------------------------------------- decisión
 
 function decision() {
-  const rows = state.candidates.map((c) =>
+  const rows = state.candidates.map((c, i) =>
     h('tr', {},
       h('td', {}, h('strong', {}, c.san)),
       h('td', { class: 'yes' }, String(c.yesCount)),
       h('td', {}, c.tags.length ? h('ul', {}, c.tags.map((t) => h('li', {}, t.text))) : h('span', { class: 'muted' }, '—'),
         c.warnings.length ? h('ul', { class: 'warnings' }, c.warnings.map((w) => h('li', {}, `⚠ ${w}`))) : null),
-      h('td', {}, h('button', { class: 'primary', onClick: () => playDecision(c.move) }, 'Jugar')),
+      h('td', {},
+        h('button', { class: 'primary', onClick: () => playDecision(c.move) }, 'Jugar'),
+        h('button', { class: 'link', onClick: () => { state.candidates.splice(i, 1); render(); } }, 'quitar'),
+      ),
     ),
   );
   const full = state.candidates.length >= MAX_CANDIDATES;
@@ -665,14 +668,14 @@ function decision() {
         class: adding ? 'toggle on' : 'toggle',
         'aria-pressed': adding ? 'true' : 'false',
         disabled: full,
-        title: full ? `Máximo ${MAX_CANDIDATES} candidatas` : '',
+        title: full ? `Máximo ${MAX_CANDIDATES} candidatas: quita una para añadir otra` : null,
         onClick: () => { state.addingCandidate = !state.addingCandidate; render(); },
       }, adding ? 'Cancelar (no añadir)' : `Añadir candidata (${state.candidates.length}/${MAX_CANDIDATES})`),
     ),
     h('p', { class: adding ? 'small adding' : 'small' }, adding
       ? 'Mueve en el tablero la jugada que te sugirieron las preguntas: se añade a la tabla, no se juega.'
       : full
-        ? `Ya tienes ${MAX_CANDIDATES} candidatas. Juega una con su botón o cualquier jugada en el tablero.`
+        ? `Ya tienes ${MAX_CANDIDATES} candidatas: quita una para apuntar otra. Una jugada en el tablero se juega directamente.`
         : 'Una jugada en el tablero se juega directamente. Para apuntarla antes como candidata, pulsa "Añadir candidata".'),
   );
 }
