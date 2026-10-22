@@ -243,3 +243,26 @@ table.stats-table tr.hardest td { background: color-mix(in srgb, var(--bad) 8%, 
 .top-moves ol { margin: 4px 0; padding-left: 22px; }
 .blind-stats { padding-left: 18px; }
 .blind-stats li { margin: 6px 0; }
+
+button.review-due { border-color: var(--bad); color: var(--bad); font-weight: 600; }
+.progress-note { border-left: 4px solid var(--border); padding: 4px 12px; margin: 10px 0; border-radius: 2px; }
+.progress-note p { margin: 4px 0; }
+.ok-box { border-color: var(--good); background: color-mix(in srgb, var(--good) 7%, transparent); }
+.ko-box { border-color: var(--bad); background: color-mix(in srgb, var(--bad) 7%, transparent); }
+.areas { padding-left: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 8px; }
+.area { border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; }
+.area-weak { border-color: var(--bad); }
+.area-strong { border-color: var(--good); }
+.area button { margin-left: 6px; padding: 2px 8px; }
+.theme-group h3 { margin: 16px 0 6px; }
+.theme-row { border-bottom: 1px solid var(--border); padding: 6px 0; }
+.theme-row summary { cursor: pointer; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; align-items: center; }
+.theme-row summary .bar { grid-column: 1 / -1; }
+.theme-name { font-weight: 600; }
+.theme-counts { font-size: 0.9rem; white-space: nowrap; }
+.theme-detail { padding: 6px 0 6px 12px; }
+.theme-detail h4 { margin: 4px 0; font-size: 0.9rem; }
+.two-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 600px) { .two-cols { grid-template-columns: 1fr; } }
+.puzzle-item, .review-list li { margin: 4px 0; }
+.review-list { padding-left: 18px; }
