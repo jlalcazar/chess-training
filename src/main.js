@@ -4,7 +4,7 @@ import { Board } from './board.js';
 import { BLIND_SPOTS, COLOR_NAMES, PIECE_NAMES, blindSpots, describeIdea, evaluateMove, explainLine, findForcingIdea, forcingSweep, load, narratePly, withTurn } from './analysis.js';
 import { DEFAULT_DEPTH, ENGINE_SOURCES, StockfishEngine, describeAdvantage, engineMove, evaluateMoves, evaluatePosition, formatScore, pvToSan, toCp, verdict, winChance } from './engine.js';
 import { emptyStats, recordExercise, summarize } from './stats.js';
-import { SRS_INTERVALS, dueReviews, dueText, emptyProgress, learnedPuzzles, recordAttempt, srsChange, themeSummary, upcomingReviews } from './progress.js';
+import { SRS_INTERVALS, dueReviews, dueText, emptyProgress, failCount, learnedPuzzles, legacyCount, recordAttempt, srsChange, themeSummary, upcomingReviews } from './progress.js';
 import { DIFFICULTIES, THEMES, THEME_HELP, fetchDailyPuzzle, fetchNextPuzzle, fetchPuzzleById, themeName } from './lichess.js';
 import {
   BREATHING,
@@ -48,11 +48,13 @@ const storage = {
       return fallback;
     }
   },
+  /** Devuelve false si no se ha podido guardar (almacenamiento lleno o no disponible). */
   set(key, value) {
     try {
       localStorage.setItem(key, JSON.stringify(value));
+      return true;
     } catch {
-      /* almacenamiento no disponible: no pasa nada */
+      return false;
     }
   },
 };
@@ -133,7 +135,7 @@ function renderSettings() {
     ),
     h('button', { class: 'primary', onClick: () => loadPuzzle() }, 'Nuevo ejercicio'),
     h('button', { onClick: () => loadPuzzle('daily') }, 'Puzzle del día'),
-    h('button', { class: due ? 'review-due' : '', onClick: openReview, title: 'Ejercicios fallados para repetir de forma espaciada' }, due ? `Repaso (${due})` : 'Repaso'),
+    h('button', { id: 'review-button', class: due ? 'review-due' : '', onClick: openReview, title: 'Ejercicios fallados para repetir de forma espaciada' }, due ? `Repaso (${due})` : 'Repaso'),
     h('button', { onClick: openThemes, title: 'Resueltos y no resueltos por tema' }, 'Temas'),
     h('button', { onClick: openStats }, 'Estadísticas'),
   );
@@ -208,8 +210,8 @@ function render() {
     nextButton(done),
   );
   const steps = settings.mode === 'tiempo'
-    ? [['calma', 'Calma'], ['candidatas', 'Candidatas'], ['tactica', 'Táctica'], ['estrategia', state.plan.endgame ? 'Final' : 'Estrategia'], ['decision', 'Decisión'], ['resolver', 'Jugar'], ['resumen', 'Repaso']]
-    : [['intuicion', 'Intuición'], ['comprobacion', 'Comprobar'], ['resolver', 'Jugar'], ['resumen', 'Repaso']];
+    ? [['calma', 'Calma'], ['candidatas', 'Candidatas'], ['tactica', 'Táctica'], ['estrategia', state.plan.endgame ? 'Final' : 'Estrategia'], ['decision', 'Decisión'], ['resolver', 'Jugar'], ['resumen', 'Resumen']]
+    : [['intuicion', 'Intuición'], ['comprobacion', 'Comprobar'], ['resolver', 'Jugar'], ['resumen', 'Resumen']];
   const idx = steps.findIndex(([id]) => id === state.step);
   const stepper = h('ol', { class: 'stepper' }, steps.map(([id, label], i) => h('li', { class: i < idx ? 'done' : i === idx ? 'current' : '' }, label)));
 
@@ -222,7 +224,7 @@ function render() {
 function nextButton(done) {
   const pending = state.srsSession ? dueReviews(loadProgress(), Date.now()).filter((r) => r.id !== state.puzzle.id).length : 0;
   if (pending) {
-    return h('button', { class: done ? 'primary next' : 'next', onClick: startReviewSession }, `Siguiente repaso (${pending}) →`);
+    return h('button', { class: done ? 'primary next' : 'next', onClick: () => startReviewSession(state.puzzle.id) }, `Siguiente repaso (${pending}) →`);
   }
   return h('button', { class: done ? 'primary next' : 'next', title: done ? '' : 'Pasa a otro ejercicio sin terminar este', onClick: () => loadPuzzle() }, 'Siguiente ejercicio →');
 }
@@ -240,7 +242,7 @@ function syncBoard() {
     return;
   }
   if (step !== 'resumen') board.setPosition(state.playFen, { orientation: state.puzzle.heroColor, lastMove: state.lastMove });
-  board.setInteractive(['candidatas', 'intuicion', 'decision', 'resolver'].includes(step) && !(step === 'resolver' && state.ply >= state.puzzle.solution.length));
+  board.setInteractive(['candidatas', 'intuicion', 'decision', 'resolver'].includes(step) && !(step === 'resolver' && (state.revealed || state.ply >= state.puzzle.solution.length)));
   if (step === 'candidatas' || step === 'decision') {
     board.setArrows(state.candidates.map((c) => ({ from: c.move.from, to: c.move.to, tone: 'candidate' })));
   } else if (step === 'comprobacion' && state.intuition) {
@@ -778,6 +780,7 @@ function playUserMove(move) {
   if (!correct) {
     const ev = evaluateMove(state.playFen, full);
     state.mistakes.push({ ply: state.ply, fen: state.playFen, uci, san: played.san, expected, ev });
+    saveProgress(false);
     state.feedback = { type: 'ko', ev };
     render();
     return;
@@ -810,7 +813,10 @@ function playUserMove(move) {
 }
 
 function revealSolution() {
+  if (state.revealed) return;
   state.revealed = true;
+  saveProgress(false);
+  render();
   const chess = load(state.playFen);
   const rest = state.puzzle.solution.slice(state.ply);
   const sans = rest.map((u) => chess.move(uciToMove(u)).san);
@@ -848,6 +854,10 @@ function resolver() {
       h('p', {}, 'Pista: ¿qué preguntas responden SÍ? Busca jaques, capturas y amenazas, para ti y para el rival.'),
     );
   }
+  if (state.revealed) {
+    children.push(h('p', { class: 'muted' }, 'Mostrando la solución…'));
+    return h('section', {}, ...children);
+  }
   if (state.hint) children.push(hintView());
   children.push(h('div', { class: 'actions' },
     state.hint < 3 ? h('button', { onClick: nextHint }, `Pista (${state.hint + 1}/3)`) : null,
@@ -861,6 +871,7 @@ const QUESTION_BY_ID = Object.fromEntries(TACTICAL_QUESTIONS.map((q) => [q.id, q
 function nextHint() {
   state.hint++;
   state.hintsUsed++;
+  saveProgress(false);
   render();
 }
 
@@ -881,10 +892,14 @@ function hintView() {
 // --------------------------------------------------------------- resumen
 
 function finish(solved) {
+  if (state.finished) return;
+  state.finished = true;
   const { puzzle } = state;
   state.solved = solved && state.mistakes.length === 0;
+  // Resuelto (para temas y repaso) = sin errores, sin pistas y sin ver la solución.
+  state.success = state.solved && state.hintsUsed === 0;
   const history = storage.get('history', []);
-  history.unshift({ id: puzzle.id, rating: puzzle.rating, solved: state.solved, mistakes: state.mistakes.length, level: settings.level, mode: settings.mode, date: new Date().toISOString() });
+  history.unshift({ id: puzzle.id, rating: puzzle.rating, solved: state.solved, clean: state.success, mistakes: state.mistakes.length, level: settings.level, mode: settings.mode, date: new Date().toISOString() });
   storage.set('history', history.slice(0, 200));
   // Estadísticas por pregunta: qué preguntas señalaban la jugada clave.
   const key = evaluateWithIdea(puzzle.fen, uciToMove(puzzle.solution[0]));
@@ -900,23 +915,45 @@ function finish(solved) {
     blind: state.blind,
     hintsUsed: state.hintsUsed,
   }));
-  // Progreso por temas y repaso espaciado: resuelto = sin errores, sin pistas y sin ver la solución.
-  const progress = loadProgress();
-  const before = progress.puzzles[puzzle.id];
-  state.success = state.solved && state.hintsUsed === 0;
-  const after = recordAttempt(progress, puzzle, { success: state.success, mistakes: state.mistakes.length, hintsUsed: state.hintsUsed, revealed: state.revealed, now: Date.now() });
-  storage.set('progress', after);
-  state.srsChange = srsChange(before, after.puzzles[puzzle.id]);
-  state.firstTry = !before;
-  renderSettings();
+  saveProgress(state.success);
   state.review = buildReview(puzzle);
   go('resumen');
   if (settings.engineOn) startEngine();
 }
 
+/**
+ * Registra el intento en temas y repaso, una sola vez por ejercicio: en cuanto
+ * falla (error, pista o ver la solución) o al terminar. Así, aunque pases al
+ * siguiente sin acabarlo, el fallo queda guardado para repasarlo.
+ */
+function saveProgress(success) {
+  if (state.progressSaved) return;
+  state.progressSaved = true;
+  const { puzzle } = state;
+  const progress = loadProgress();
+  const before = progress.puzzles[puzzle.id];
+  const after = recordAttempt(progress, puzzle, { success, mistakes: state.mistakes.length, hintsUsed: state.hintsUsed, revealed: state.revealed, now: Date.now() });
+  state.progressStored = storage.set('progress', after);
+  state.srsChange = state.progressStored ? srsChange(before, after.puzzles[puzzle.id]) : null;
+  state.firstTry = !before;
+  refreshReviewBadge();
+}
+
 function loadProgress() {
   const p = storage.get('progress', null);
-  return p?.puzzles ? p : emptyProgress();
+  if (p?.puzzles) return p;
+  // Primera vez: se apuntan los ejercicios hechos antes (no guardaban sus temas).
+  const legacyIds = [...new Set(storage.get('history', []).map((x) => x.id).filter(Boolean))];
+  const fresh = { ...emptyProgress(), legacyIds };
+  storage.set('progress', fresh);
+  return fresh;
+}
+
+/** Por qué cuenta como no resuelto. */
+function failReason() {
+  if (state.revealed) return 'porque viste la solución';
+  if (state.mistakes.length) return state.mistakes.length === 1 ? 'por el error' : 'por los errores';
+  return state.hintsUsed === 1 ? 'porque usaste una pista' : `porque usaste ${state.hintsUsed} pistas`;
 }
 
 /** Qué ha pasado con el ejercicio en tus temas y en el repaso. */
@@ -931,8 +968,11 @@ function progressNote() {
     learned: '¡Aprendido! Lo has acertado en todos los repasos y sale de la lista.',
     early: change?.kind === 'early' ? `Repasado antes de tiempo: la fecha no cambia (le toca ${dueText(change.due, Date.now())}).` : '',
   }[change?.kind];
+  if (state.progressStored === false) {
+    return h('div', { class: 'progress-note ko-box' }, h('p', {}, 'No se ha podido guardar tu progreso: el almacenamiento del navegador está lleno o no está disponible.'));
+  }
   const where = state.firstTry
-    ? `Cuenta como ${state.success ? 'resuelto' : 'no resuelto'} en tus temas: ${themes}.`
+    ? `Cuenta como ${state.success ? 'resuelto' : `no resuelto (${failReason()})`} en tus temas: ${themes}.`
     : `Ya lo habías intentado: tus temas siguen contando el primer intento.`;
   return h('div', { class: `progress-note ${state.success ? 'ok-box' : 'ko-box'}` },
     h('p', {}, where, ' ', h('button', { class: 'link', onClick: openThemes }, 'Ver mis temas')),
@@ -947,14 +987,15 @@ function resumen() {
   const isOpen = (id) => [...state.plan.tactical, ...state.plan.strategic].find((q) => q.id === id)?.open;
   const missed = Object.entries(state.answers).filter(([id, a]) => a && !isOpen(id) && a.user !== null && a.user !== a.result.yes);
   const history = storage.get('history', []);
-  const solvedCount = history.filter((x) => x.solved).length;
+  // Los registros antiguos no tienen `clean`: se usa `solved`.
+  const solvedCount = history.filter((x) => x.clean ?? x.solved).length;
   const line = (() => {
     const c = load(puzzle.fen);
     return puzzle.solution.map((u) => c.move(uciToMove(u)).san).join(' ');
   })();
 
   return h('section', {},
-    h('h2', {}, state.solved ? '¡Resuelto!' : state.mistakes.length ? 'Resuelto con errores' : 'Solución vista'),
+    h('h2', {}, state.success ? '¡Resuelto!' : state.solved ? 'Resuelto con pistas' : state.mistakes.length && !state.revealed ? 'Resuelto con errores' : 'Solución vista'),
     h('p', {}, h('strong', {}, 'Solución: '), line),
     h('p', {}, h('strong', {}, `Clave ${key.san}: `), key.tags.length ? key.tags.map((t) => t.text).join('; ') : 'jugada tranquila: no da jaque ni captura; aquí cuentan las preguntas estratégicas.'),
     lineView(),
@@ -1281,7 +1322,7 @@ function remate() {
     f.moves.length ? h('p', { class: 'muted small' }, f.moves.join(' ')) : null,
     h('div', { class: 'actions' },
       h('button', { onClick: () => startFinale(f.startFen) }, 'Empezar de nuevo'),
-      h('button', { onClick: () => { state.finale = null; go('resumen'); } }, 'Volver al repaso'),
+      h('button', { onClick: () => { state.finale = null; go('resumen'); } }, 'Volver al resumen'),
     ),
   );
 }
@@ -1415,6 +1456,21 @@ function openStats() {
 
 // ------------------------------------------------------- temas y repaso
 
+/** Actualiza solo el botón "Repaso (N)" (sin reconstruir los selectores). */
+function refreshReviewBadge() {
+  const button = document.getElementById('review-button');
+  if (!button) return;
+  const due = dueReviews(loadProgress(), Date.now()).length;
+  button.textContent = due ? `Repaso (${due})` : 'Repaso';
+  button.classList.toggle('review-due', due > 0);
+}
+
+// Lo que vence mientras la pestaña está abierta también tiene que avisar.
+document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && refreshReviewBadge());
+window.addEventListener('focus', refreshReviewBadge);
+window.addEventListener('storage', (ev) => ev.key === 'progress' && refreshReviewBadge());
+setInterval(refreshReviewBadge, 60_000);
+
 function openDialog(id, title, ...content) {
   let dialog = document.getElementById(id);
   if (!dialog) {
@@ -1447,11 +1503,13 @@ function replay(rec) {
   loadPuzzle(rec.puzzle ?? rec.id, { srs: Boolean(rec.srs) });
 }
 
-function startReviewSession() {
+/** Carga el repaso pendiente más atrasado; `skipId` salta el que está en pantalla. */
+function startReviewSession(skipId) {
   const due = dueReviews(loadProgress(), Date.now());
-  if (!due.length) return openReview();
+  const next = due.find((r) => r.id !== skipId);
+  if (!next) return openReview();
   closeDialogs();
-  loadPuzzle(due[0].puzzle, { srs: true });
+  loadPuzzle(next.puzzle, { srs: true });
 }
 
 function puzzleItem(rec, extra) {
@@ -1461,7 +1519,7 @@ function puzzleItem(rec, extra) {
     h('span', { class: 'muted small' }, ` ${rec.rating} · ${rec.attempts.length} ${rec.attempts.length === 1 ? 'intento' : 'intentos'}${last && !last.success ? ' · último fallado' : ''}`),
     extra ? h('span', { class: 'muted small' }, ` · ${extra}`) : null,
     ' ',
-    h('button', { class: 'link', onClick: () => replay(rec) }, 'Repetir'),
+    h('button', { class: 'link', 'aria-label': `Repetir el ejercicio ${rec.id}`, onClick: () => replay(rec) }, 'Repetir'),
   );
 }
 
@@ -1478,7 +1536,7 @@ function themeRow(t) {
       bar(t.rate, tone),
     ),
     h('div', { class: 'theme-detail' },
-      h('div', { class: 'actions' }, h('button', { class: 'primary', onClick: () => trainTheme(t.theme) }, `Entrenar ${themeName(t.theme).toLowerCase()}`)),
+      h('div', { class: 'actions' }, h('button', { class: 'primary', onClick: () => trainTheme(t.theme) }, `Entrenar: ${themeName(t.theme)}`)),
       THEME_HELP[t.theme] ? h('p', { class: 'muted small' }, THEME_HELP[t.theme].text) : null,
       h('div', { class: 'two-cols' },
         h('div', {}, h('h4', {}, `No resueltos (${t.failed.length})`), t.failed.length ? h('ul', {}, t.failed.map((r) => puzzleItem(r, r.srs ? `en repaso, ${dueText(r.srs.due, Date.now())}` : r.learnedAt ? 'aprendido en el repaso' : ''))) : h('p', { class: 'muted small' }, 'Ninguno.')),
@@ -1490,32 +1548,39 @@ function themeRow(t) {
 
 function openThemes() {
   const progress = loadProgress();
-  const { groups, weakest, strongest, total, solved } = themeSummary(progress);
-  const legacy = storage.get('history', []).length - total;
+  const { groups, weakest, strongest, total, solved, anyEnough } = themeSummary(progress);
+  const legacy = legacyCount(progress);
+  const legacyNote = legacy > 0
+    ? h('p', { class: 'muted small' }, legacy === 1
+      ? '1 ejercicio anterior a esta versión no guardaba sus temas y no se cuenta.'
+      : `${legacy} ejercicios anteriores a esta versión no guardaban sus temas y no se cuentan.`)
+    : null;
   if (!total) {
     return openDialog('themes-dialog', 'Mis temas',
       h('p', {}, 'Todavía no hay ejercicios. Cada ejercicio que termines se clasifica por sus temas de Lichess como resuelto (sin errores, sin pistas y sin ver la solución) o no resuelto.'),
-      legacy > 0 ? h('p', { class: 'muted small' }, 'Los ejercicios que hiciste antes de esta versión no guardaban sus temas, así que no aparecen aquí.') : null,
+      legacyNote,
     );
   }
   const card = (t, kind) => h('li', { class: `area area-${kind}` },
     h('strong', {}, themeName(t.theme)), ` ${t.solved.length} de ${t.total} (${Math.round(t.rate * 100)}%) `,
-    kind === 'weak' ? h('button', { onClick: () => trainTheme(t.theme) }, 'Entrenar') : null,
+    kind === 'weak' ? h('button', { 'aria-label': `Entrenar ${themeName(t.theme)}`, onClick: () => trainTheme(t.theme) }, 'Entrenar') : null,
   );
   openDialog('themes-dialog', 'Mis temas',
     h('p', {}, `${total} ${total === 1 ? 'ejercicio' : 'ejercicios'} · ${solved} ${solved === 1 ? 'resuelto' : 'resueltos'} a la primera (${Math.round((solved / total) * 100)}%).`),
     weakest.length
       ? h('div', {}, h('h3', {}, 'Áreas a estudiar'), h('p', { class: 'muted small' }, 'Los temas con peor porcentaje (con al menos 3 ejercicios). Entrena uno hasta que suba.'), h('ul', { class: 'areas' }, weakest.map((t) => card(t, 'weak'))))
-      : h('p', { class: 'muted small' }, 'Con al menos 3 ejercicios de un tema empezaré a señalar tus áreas a estudiar.'),
+      : h('p', { class: 'muted small' }, anyEnough
+        ? 'Sin áreas débiles por ahora: no has fallado ningún tema con 3 o más ejercicios.'
+        : 'Con al menos 3 ejercicios de un tema empezaré a señalar tus áreas a estudiar.'),
     strongest.length ? h('div', {}, h('h3', {}, 'Puntos fuertes'), h('ul', { class: 'areas' }, strongest.map((t) => card(t, 'strong')))) : null,
     ...groups.map((g) => h('section', { class: 'theme-group' }, h('h3', {}, g.name), ...g.themes.map(themeRow))),
-    legacy > 0 ? h('p', { class: 'muted small' }, `${legacy} ejercicios anteriores a esta versión no guardaban sus temas y no se cuentan.`) : null,
+    legacyNote,
     h('div', { class: 'actions' },
       h('button', {
         onClick: () => {
           if (!confirm('¿Borrar tu progreso por temas y tu repaso?')) return;
           storage.set('progress', emptyProgress());
-          renderSettings();
+          refreshReviewBadge();
           openThemes();
         },
       }, 'Borrar progreso'),
@@ -1529,12 +1594,12 @@ function openReview() {
   const due = dueReviews(progress, now);
   const upcoming = upcomingReviews(progress, now);
   const learned = learnedPuzzles(progress);
-  const item = (r) => puzzleItem(r, `${r.themes.slice(0, 3).map(themeName).join(', ')} · caja ${r.srs.box + 1}/${SRS_INTERVALS.length} · fallado ${r.srs.lapses} ${r.srs.lapses === 1 ? 'vez' : 'veces'}`);
+  const item = (r) => puzzleItem(r, `${r.themes.slice(0, 3).map(themeName).join(', ')} · caja ${r.srs.box + 1}/${SRS_INTERVALS.length} · fallado ${failCount(r)} ${failCount(r) === 1 ? 'vez' : 'veces'}`);
   openDialog('review-dialog', 'Repaso espaciado',
     h('p', { class: 'muted small' }, `Los ejercicios que no resuelves (con errores, con pistas o viendo la solución) vuelven a los ${SRS_INTERVALS.join(', ')} días. Si lo aciertas cuando toca, pasa a la siguiente caja; si fallas, vuelve a empezar. Al superar la última caja, queda aprendido.`),
     h('div', { class: 'actions' },
       due.length
-        ? h('button', { class: 'primary', onClick: startReviewSession }, `Empezar repaso (${due.length})`)
+        ? h('button', { class: 'primary', onClick: () => startReviewSession() }, `Empezar repaso (${due.length})`)
         : h('p', {}, upcoming.length ? `Nada para hoy. El próximo, ${dueText(upcoming[0].srs.due, now)}.` : 'No tienes ejercicios pendientes de repaso.'),
     ),
     due.length ? h('div', {}, h('h3', {}, `Para hoy (${due.length})`), h('ul', { class: 'review-list' }, due.map(item))) : null,

@@ -266,3 +266,7 @@ button.review-due { border-color: var(--bad); color: var(--bad); font-weight: 60
 @media (max-width: 600px) { .two-cols { grid-template-columns: 1fr; } }
 .puzzle-item, .review-list li { margin: 4px 0; }
 .review-list { padding-left: 18px; }
+.theme-row summary { list-style: none; }
+.theme-row summary::-webkit-details-marker { display: none; }
+.theme-row .theme-name::before { content: '▸ '; color: var(--muted); }
+.theme-row[open] .theme-name::before { content: '▾ '; }
