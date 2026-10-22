@@ -14,7 +14,7 @@ Requiere **Node.js 20.19 o superior** (recomendado 22). Comprueba tu versión co
 ```bash
 npm install
 npm run dev      # http://localhost:5173
-npm test         # tests del análisis y del cliente de Lichess
+npm test         # tests de la lógica (análisis, método, progreso, motor y módulos nuevos)
 npm run build    # versión estática en dist/
 ```
 
@@ -28,6 +28,11 @@ Parámetros de URL útiles para depurar:
 **Modo "con tiempo"** (proceso completo):
 
 1. **Calma**: 30 s de respiración (inhalar 7 s, exhalar 5 s) mirando la posición sin calcular.
+   - *(opcional)* **¿Qué ha cambiado con la jugada del rival?**: señalas en el tablero qué ataca
+     ahora la pieza que se movió, qué dejó de defender y qué líneas abrió o cortó; la app lo corrige
+     (verde, rojo, gris) y en el resumen lo enlaza con la jugada clave.
+   - *(opcional)* **Golpe de vista**: 10 s para la primera jugada que salga, con tu seguridad
+     (Segura, Probable, Corazonada). Entra como candidata 1 («intuición»).
 2. **Candidatas**: hasta 5 jugadas marcadas en el tablero, sin calcular variantes.
 3. **Preguntas tácticas** (siempre, para los dos colores): ¿mate?, ¿piezas desprotegidas?,
    ¿piezas amenazadas?, ¿piezas alineadas / a salto de caballo / doble de peón?
@@ -37,13 +42,25 @@ Parámetros de URL útiles para depurar:
    debilidades, qué cambiar, mejores casillas).
    Las preguntas que no tienen respuesta de sí o no (peor pieza, plan del rival, cambios,
    estructura…) son **abiertas**: escribes tu idea y la contrastas con el análisis.
+   - *(opcional)* **Calcular**: eliges 2 candidatas e introduces cada línea a ciegas hasta una
+     posición tranquila, con un contador en cada jugada del rival («tiene 2 jaques y 1 captura; has
+     mirado 1 de 3»), y valoras el final (+−, ±, =, ∓, −+).
 5. **Decisión**: cada candidata muestra cuántos "síes" consigue, qué deja colgado y si abre
    una **idea forzada de varias jugadas** (p. ej. "da jaque → ataque doble → ganas material"),
    sin desvelar las jugadas. Si las preguntas te sugirieron una jugada nueva, pulsa
    **"Añadir candidata"** y muévela en el tablero: se apunta en la tabla (y cuenta como candidata
    en las estadísticas) sin jugarse; si ya tienes 5, quita antes una. Sin ese botón, una jugada en
    el tablero se juega directamente.
-6. **Jugar** la línea contra las respuestas del puzzle.
+   Al jugar desde Decisión (o desde Comprobación) aparece **¿Qué permite mi jugada?**: la posición
+   tras tu jugada con el rival al turno; juegas la respuesta que más te preocupa o «No veo nada
+   peligroso» y la app revela los jaques, capturas, amenazas, mates e ideas forzadas del rival. Los
+   avisos de la tabla solo se ven después de este paso.
+6. **Jugar** la línea contra las respuestas del puzzle. Desde Intermedio, tras cada jugada correcta
+   **predices la respuesta del rival** (no cuenta como error). Antes de cada jugada tuya, un
+   **barrido rápido** con los recuentos de jaques, capturas y amenazas. Con **«Introduce la línea
+   entera»** calculas a ciegas: el tablero no se mueve, respondes 2 o 3 preguntas sobre la posición
+   final y la app marca la primera jugada que se aparta. Si fallas, la app dice **por qué**: orden
+   equivocado, buena pieza en mala casilla, fallo de profilaxis, deja algo colgado u otra idea.
 7. **Repaso**: solución explicada paso a paso, temas, si la clave estaba entre tus candidatas y en
    qué preguntas fallaste. Bajo el tablero puedes **navegar por toda la partida** (⏮ ◀ Ejercicio ▶ ⏭
    o las flechas del teclado), desde la posición inicial hasta el final de la solución.
@@ -103,6 +120,47 @@ guardaban sus temas.
 
 **Modo "sin tiempo"**: intuición (cuenta atrás de 20 s), comprobación de que no te dejas nada, jugar.
 
+**Modo "¿Táctica o mejora?"**: en un puzzle siempre hay táctica y lo sabes. Este modo mezcla puzzles
+con posiciones tranquilas de la misma partida (de 2 a 8 medias jugadas antes del error del rival),
+comprobadas con Stockfish. Declaras «hay táctica» o «toca mejorar» y juegas; se miden las
+combinaciones inventadas y las tácticas no vistas.
+
+### Opciones y botones nuevos
+
+Todo lo nuevo es opcional y se guarda en `settings` (botón **Opciones**):
+
+- **Responder señalando**: en mate, desprotegidas, amenazadas, geometría y debilidades tocas las
+  casillas (o juegas el mate) en lugar de decir Sí/No. «Has encontrado 3 de 4 en 9 s». Así decir
+  siempre «sí» ya no cuenta como acierto.
+- En **debilidades**, «Ver control» tiñe el tablero por bando con agujeros (○) y puestos avanzados (★).
+  En **peor pieza** y **mejores casillas** tocas la pieza y dónde la quieres: ruta con flechas
+  numeradas, tiempos y casillas peligrosas.
+- **Ayuda que se retira**: cada pregunta pasa de Guiada a Rápida (tarjeta «Chequeo rápido» de 30 s) y
+  a Chequeo automático al acertar el 85 % de las 10 últimas señalando y rápido; una de cada 5 vuelve
+  como control sorpresa y baja un escalón si la clave respondía SÍ y no estaba entre tus candidatas.
+- Pasos opcionales: «¿Qué ha cambiado?», golpe de vista, «Calcular» siempre, «¿Qué permite mi
+  jugada?», predecir al rival (desde Intermedio, siempre o nunca), barrido en la línea, flechas de la
+  línea a ciegas (ocultas por defecto en Avanzado y Experto).
+
+Botones: **Ráfaga** (2 minutos de una sola pregunta, posiciones seguidas, ritmo de 8 → 6 → 4 s),
+**Mis partidas** (tus imprecisiones, errores y errores graves de Lichess convertidos en ejercicios y
+clasificados con las 5 preguntas de autoevaluación) y, en Temas, **Ciclo Woodpecker** (20 ejercicios
+de un tema; el primer ciclo con el proceso completo y los siguientes sin tiempo y con la mitad del
+tiempo; automatizado = bien en menos de 10 s en dos ciclos seguidos).
+
+En el tablero: un indicador dice qué hace un clic en cada momento (Mover, Apuntar, Señalar, Rival,
+A ciegas o Quieto); con el **botón derecho** dibujas flechas y círculos mientras piensas (un clic
+normal los borra). **Atajos**: S/N responden, ? pide pista, Intro continúa, 1-5 eligen candidata, P la
+juega. En el móvil (menos de 860 px), una barra fija abajo repite las acciones principales.
+
+En el resumen: **Tu recorrido** (segundos por fase, dónde apareció la clave, aviso de fijación), la
+tarjeta del **golpe de vista** y, con el motor, la **gráfica de evaluación** de la partida y la
+**clasificación de cada jugada tuya** (brillante, excelente, buena, imprecisión, error, error grave,
+por la probabilidad de ganar que pierde). Cuando un ejercicio vuelve en el **repaso**, un aviso
+recuerda qué falló la vez anterior. **Estadísticas** añade «Tu intuición» (acierto por seguridad y
+Brier), por qué fallan tus jugadas, de dónde sale la clave, la escalera de cada pregunta, ráfagas y
+el modo «¿Táctica o mejora?».
+
 ## Estructura
 
 | Archivo | Qué hace |
@@ -114,15 +172,57 @@ guardaban sus temas.
 | `scripts/copy-stockfish.mjs` | Copia el motor de `node_modules/stockfish` a `public/stockfish/` (se ejecuta al instalar, en `dev` y en `build`). |
 | `src/progress.js` | Progreso por tema (primer intento) y repaso espaciado Leitner de los ejercicios fallados. |
 | `src/stats.js` | Estadísticas por pregunta: registro por ejercicio y resumen ordenado por dificultad. |
-| `src/board.js` | Tablero DOM con marcas y flechas. |
+| `src/board.js` | Tablero DOM: modos de clic (mover o señalar), marcas, tintes, flechas numeradas, posición «en la cabeza» para la línea a ciegas y dibujos del usuario. |
+| `src/intuition.js` | Golpe de vista: los 4 casos, acierto por seguridad y puntuación de Brier. |
+| `src/timeline.js` | Mapa del proceso: segundos por fase, dónde apareció la clave y fijación. |
+| `src/errors.js` | Por qué falló una jugada (orden, casilla, profilaxis, colgada u otra). |
+| `src/blindline.js` | Línea a ciegas, preguntas sobre la posición final y valoración de finales. |
+| `src/scaffold.js` | Ayuda que se retira: etapas por pregunta, subidas, bajadas y control sorpresa. |
+| `src/drills.js` | Ráfagas de fluidez y ciclos Woodpecker. |
+| `src/mixed.js` | Modo «¿Táctica o mejora?»: posiciones tranquilas de la partida. |
+| `src/selfgames.js` | Tus partidas de Lichess convertidas en ejercicios y clasificadas. |
+| `src/evalgraph.js` | Gráfica de evaluación y clasificación de jugadas por probabilidad de ganar. |
+| `src/dom.js` | `h()`, `storage` y utilidades compartidas. |
 | `src/main.js` | Flujo de pasos e interfaz. |
 
 ## Próximas iteraciones
 
-Ideas sacadas de proyectos de código abierto (ver la conversación del 20/10/2026):
+- Dividir `main.js` (unas 3.700 líneas) en vistas por paso; la lógica ya está en módulos puros.
+- Dibujos del usuario en pantallas táctiles (pulsación larga) y animación de las piezas.
+- Responder señalando también en la tarjeta del chequeo rápido para las preguntas estratégicas
+  cerradas que hoy solo admiten Sí/No (coronar, fijar).
+- Ráfagas de preguntas estratégicas y ráfagas con posiciones de tus partidas de Lichess.
+- Calibrar los umbrales (ayuda que se retira, posiciones tranquilas, clasificación de tus errores) con
+  datos reales de uso.
 
-- Gráfica de evaluación de la línea y clasificación tipo "brillante/excelente" (Chesskit, freechess).
-- Tablero chessground (el de Lichess) con flechas dibujables por el usuario y animaciones.
+## Resumen de la versión con todas las sugerencias
+
+Implementadas las 23 mejoras (rama `claude/all-sugerencias`), con el principio común de que primero
+el jugador hace el paso y después la app revela, corrige y mide. Decisiones tomadas:
+
+- **SEE** con el algoritmo «swap» y rayos X (sin clavadas ni jaques: es un recuento estático). Una
+  captura que pierde material pasa de «sí» a aviso.
+- **Hallazgos con `targets`** y `match` (`all` para jugadas como el mate: hay que tocar origen y
+  destino). Las parejas alineadas y los agujeros son informativos: tocarlos no es falsa alarma ni
+  dejarlos es fallo. El rey en el centro solo es debilidad sin enroque, con damas y con columnas
+  abiertas al lado.
+- **Pasos nuevos** activados por defecto pero con «Saltar»: «¿Qué ha cambiado?», golpe de vista y
+  «¿Qué permite mi jugada?». «Responder señalando» y el paso «Calcular» están apagados por defecto
+  (Calcular tiene un botón en Decisión). El flujo de cada ejercicio se fija al empezarlo.
+- Las **predicciones** fallidas tienen su propio contador; no cuentan como error ni como «no
+  resuelto». En la **línea a ciegas**, las jugadas que coinciden con la solución se dan por jugadas y
+  una jugada tuya distinta cuenta como jugada en el tablero (y como fallo).
+- **Ayuda que se retira** guardada en `stats.scaffold`; solo cuentan para subir las respuestas
+  señalando, y para bajar solo las preguntas que de verdad respondían SÍ en la posición.
+- **Posición tranquila** (modo mezcla): mejor jugada no forzante, segunda a menos de 1,5 peones,
+  evaluación entre −3 y +3 y sin ganancia forzada de la búsqueda táctica. Sin Stockfish, el
+  ejercicio sale como puzzle normal.
+- **Mis partidas**: el `variation` de Lichess es la solución (tu jugada, la respuesta y tu siguiente
+  jugada como mucho). Al añadirlos, cuentan como fallados (lo fallaste en la partida) y entran en el
+  repaso desde mañana.
+- **Datos**: se mantienen las claves `settings`, `stats`, `progress` y `history` y todos los campos
+  anteriores; los bloques nuevos son opcionales. Claves nuevas: `pool` (posiciones de los últimos
+  ejercicios para las ráfagas) y `woodpecker` (el ciclo en curso).
 
 ## Créditos
 

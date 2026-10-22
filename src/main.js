@@ -2320,6 +2320,7 @@ function resumen() {
     h('h2', {}, state.success ? '¡Resuelto!' : state.solved ? 'Resuelto con pistas' : state.mistakes.length && !state.revealed ? 'Resuelto con errores' : 'Solución vista'),
     h('p', {}, h('strong', {}, 'Solución: '), line),
     h('p', {}, h('strong', {}, `Clave ${key.san}: `), key.tags.length ? key.tags.map((t) => t.text).join('; ') : 'jugada tranquila: no da jaque ni captura; aquí cuentan las preguntas estratégicas.'),
+    changeSummary(),
     lineView(),
     themesView(),
     state.mixed ? h('p', { class: state.mixed.declared === 'tactic' ? 'ok' : 'ko' }, state.mixed.declared === 'tactic' ? 'Dijiste «táctica» y la había: bien visto.' : 'Dijiste «toca mejorar», pero había táctica: no la viste.') : null,
@@ -2808,6 +2809,20 @@ function remate() {
       h('button', { onClick: () => { state.finale = null; go('resumen'); } }, 'Volver al resumen'),
     ),
   );
+}
+
+/** Paso «¿Qué cambió?» en el resumen: lo que encontraste y cómo se enlaza con la jugada clave. */
+function changeSummary() {
+  const { puzzle } = state;
+  if (!puzzle.fenBefore || !puzzle.lastMove || state.mixed?.kind === 'quiet') return null;
+  const ch = state.change;
+  const diff = ch?.diff ?? lastMoveDiff(puzzle.fenBefore, puzzle.fen, puzzle.lastMove);
+  const link = changeLink(diff, puzzle.fen, puzzle.solution[0]);
+  if (!link && !ch?.result) return null;
+  return h('p', { class: 'small change-link' },
+    h('strong', {}, `¿Qué cambió con ${puzzle.lastMove.san}? `),
+    ch?.result ? `${pointingSummary(ch.result)} ` : '',
+    link ?? '');
 }
 
 /** Cambios de etapa de la ayuda que se retira, con su explicación. */
