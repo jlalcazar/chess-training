@@ -1,6 +1,7 @@
 import './styles.css';
 import { Chess } from 'chess.js';
 import { Board } from './board.js';
+import { $, h, storage, uciToMove } from './dom.js';
 import { BLIND_SPOTS, COLOR_NAMES, PIECE_NAMES, blindSpots, describeIdea, evaluateMove, explainLine, findForcingIdea, forcingSweep, load, narratePly, withTurn } from './analysis.js';
 import { DEFAULT_DEPTH, ENGINE_SOURCES, StockfishEngine, describeAdvantage, engineMove, evaluateMoves, evaluatePosition, formatScore, pvToSan, toCp, verdict, winChance } from './engine.js';
 import { emptyStats, recordExercise, summarize } from './stats.js';
@@ -20,7 +21,6 @@ import {
 
 // ----------------------------------------------------------------- utilidades
 
-const $ = (sel) => document.querySelector(sel);
 const params = new URLSearchParams(location.search);
 const DEBUG = params.has('debug');
 
@@ -28,46 +28,14 @@ function log(...args) {
   if (DEBUG) console.log('[trainer]', ...args);
 }
 
-function h(tag, attrs = {}, ...children) {
-  const el = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (v == null || v === false) continue;
-    if (k.startsWith('on')) el.addEventListener(k.slice(2).toLowerCase(), v);
-    else if (k === 'class') el.className = v;
-    else el.setAttribute(k, v === true ? '' : v);
-  }
-  for (const c of children.flat()) if (c != null && c !== false) el.append(c instanceof Node ? c : String(c));
-  return el;
-}
-
-const storage = {
-  get(key, fallback) {
-    try {
-      return JSON.parse(localStorage.getItem(key)) ?? fallback;
-    } catch {
-      return fallback;
-    }
-  },
-  /** Devuelve false si no se ha podido guardar (almacenamiento lleno o no disponible). */
-  set(key, value) {
-    try {
-      localStorage.setItem(key, JSON.stringify(value));
-      return true;
-    } catch {
-      return false;
-    }
-  },
-};
-
-const uciToMove = (uci) => ({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
-
 // ---------------------------------------------------------------------- estado
 
 const settings = { level: 'casual', angle: 'mix', difficulty: 'normal', mode: 'tiempo', breathing: true, engineOn: false, engineSource: 'stockfish', ...storage.get('settings', {}) };
 let state = null;
 let timer = null;
 
-const board = new Board($('#board'), { onMove: (m) => onBoardMove(m) });
+const board = new Board($('#board'), { onMove: (m) => onBoardMove(m), onPick: (sq) => onBoardPick(sq) });
+const boardMode = $('#board-mode');
 const panel = $('#panel');
 
 function stopTimer() {
@@ -244,6 +212,7 @@ function syncBoard() {
   }
   if (step !== 'resumen') board.setPosition(state.playFen, { orientation: state.puzzle.heroColor, lastMove: state.lastMove });
   board.setInteractive(['candidatas', 'intuicion', 'decision', 'resolver'].includes(step) && !(step === 'resolver' && (state.revealed || state.ply >= state.puzzle.solution.length)));
+  board.setPickMode(Boolean(state.pointing));
   if (step === 'candidatas' || step === 'decision') {
     board.setArrows(state.candidates.map((c) => ({ from: c.move.from, to: c.move.to, tone: 'candidate' })));
   } else if (step === 'comprobacion' && state.intuition) {
@@ -264,7 +233,52 @@ function syncBoard() {
     else if (best) board.setArrows([{ from: best.slice(0, 2), to: best.slice(2, 4), tone: 'good' }]);
     else board.setArrows([]);
   }
+  renderBoardMode();
   renderBoardNav();
+}
+
+/** Qué hace un clic en el tablero en cada momento. */
+function clickMode() {
+  const { step } = state;
+  if (state.pointing) return { kind: 'pick', text: 'Clic: señalar casillas (otra vez para quitarla)' };
+  switch (step) {
+    case 'candidatas':
+      return { kind: 'candidate', text: 'Clic: apuntar candidata (no se juega)' };
+    case 'intuicion':
+      return { kind: 'candidate', text: 'Clic: marcar tu jugada (aún no se juega)' };
+    case 'decision':
+      return state.addingCandidate ? { kind: 'candidate', text: 'Clic: apuntar candidata (no se juega)' } : { kind: 'move', text: 'Clic: jugar' };
+    case 'comprobacion':
+      return { kind: 'move', text: 'Clic: jugar' };
+    case 'resolver':
+      if (state.revealed || state.ply >= state.puzzle.solution.length) return { kind: 'none', text: 'El tablero está quieto' };
+      return { kind: 'move', text: 'Clic: jugar' };
+    case 'remate':
+      return { kind: 'move', text: 'Clic: jugar contra Stockfish' };
+    case 'resumen':
+      return { kind: 'none', text: 'Navega con los botones o las flechas del teclado' };
+    default:
+      return { kind: 'none', text: 'El tablero está quieto: mira sin mover' };
+  }
+}
+
+function renderBoardMode() {
+  if (!state) {
+    boardMode.hidden = true;
+    return;
+  }
+  const mode = clickMode();
+  boardMode.hidden = false;
+  boardMode.replaceChildren(
+    h('span', { class: `mode-chip mode-${mode.kind}` }, { move: 'Mover', candidate: 'Apuntar', pick: 'Señalar', rival: 'Rival', line: 'A ciegas', none: 'Quieto' }[mode.kind]),
+    h('span', {}, mode.text),
+    h('span', { class: 'muted small mode-draw' }, ' · Botón derecho: dibujar flechas y círculos'),
+  );
+}
+
+function onBoardPick(sq) {
+  if (!state?.pointing) return;
+  state.pointing.onPick(sq);
 }
 
 // ------------------------------------------- navegación por la partida (repaso)
