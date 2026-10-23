@@ -155,7 +155,19 @@ function renderSettings() {
   // Un tema elegido desde "Temas" puede no estar en la lista corta del selector.
   const themeOptions = THEMES[settings.angle] ? THEMES : { ...THEMES, [settings.angle]: themeName(settings.angle) };
   const due = dueReviews(loadProgress(), Date.now()).length;
+  // En el móvil solo se ven «Nuevo ejercicio», «Repaso» y «Menú»; el resto se despliega.
+  const header = document.querySelector('header');
+  const menu = h('button', {
+    class: 'menu-toggle keep',
+    'aria-expanded': String(header.classList.contains('menu-open')),
+    onClick: () => {
+      header.classList.toggle('menu-open');
+      menu.setAttribute('aria-expanded', String(header.classList.contains('menu-open')));
+      menu.textContent = header.classList.contains('menu-open') ? '✕ Cerrar' : '☰ Menú';
+    },
+  }, header.classList.contains('menu-open') ? '✕ Cerrar' : '☰ Menú');
   $('#settings').replaceChildren(
+    menu,
     h('label', {}, 'Nivel ', select('level', levelOptions)),
     h('label', {}, 'Modo ', select('mode', MODES)),
     h('label', {}, 'Tema ', select('angle', themeOptions)),
@@ -173,9 +185,9 @@ function renderSettings() {
       }),
       ' Respiración inicial',
     ),
-    h('button', { class: 'primary', onClick: () => loadPuzzle() }, 'Nuevo ejercicio'),
+    h('button', { class: 'primary keep', onClick: () => loadPuzzle() }, 'Nuevo ejercicio'),
     h('button', { onClick: () => loadPuzzle('daily') }, 'Puzzle del día'),
-    h('button', { id: 'review-button', class: due ? 'review-due' : '', onClick: openReview, title: 'Ejercicios fallados para repetir de forma espaciada' }, due ? `Repaso (${due})` : 'Repaso'),
+    h('button', { id: 'review-button', class: due ? 'review-due keep' : 'keep', onClick: openReview, title: 'Ejercicios fallados para repetir de forma espaciada' }, due ? `Repaso (${due})` : 'Repaso'),
     h('button', { onClick: openThemes, title: 'Resueltos y no resueltos por tema' }, 'Temas'),
     h('button', { onClick: openBurst, title: '2 minutos de una sola pregunta, posiciones seguidas' }, 'Ráfaga'),
     h('button', { onClick: openOwnGames, title: 'Tus errores en tus partidas de Lichess, convertidos en ejercicios' }, 'Mis partidas'),
@@ -210,8 +222,8 @@ function openOptions() {
   openDialog('options-dialog', 'Opciones de entrenamiento',
     h('p', { class: 'muted small' }, 'Todo es opcional: el proceso de siempre sigue igual. Los cambios se aplican desde el siguiente ejercicio.'),
     h('ul', { class: 'options' }, OPTIONS.map(row)),
-    h('h3', {}, 'Atajos de teclado'),
-    h('p', { class: 'small' }, 'S y N: responder · ?: pista · Intro: continuar · 1-5: elegir candidata · P: jugar la elegida · flechas: navegar en el resumen.'),
+    h('h3', { class: 'only-mouse' }, 'Atajos de teclado'),
+    h('p', { class: 'small only-mouse' }, 'S y N: responder · ?: pista · Intro: continuar · 1-5: elegir candidata · P: jugar la elegida · flechas: navegar en el resumen.'),
   );
 }
 
@@ -458,7 +470,8 @@ function renderBoardMode() {
   boardMode.replaceChildren(
     h('span', { class: `mode-chip mode-${mode.kind}` }, { move: 'Mover', candidate: 'Apuntar', pick: 'Señalar', rival: 'Rival', line: 'A ciegas', none: 'Quieto' }[mode.kind]),
     h('span', {}, mode.text),
-    h('span', { class: 'muted small mode-draw' }, ' · Botón derecho: dibujar flechas y círculos'),
+    h('span', { class: 'muted small mode-draw only-mouse' }, ' · Botón derecho: dibujar flechas y círculos'),
+    h('span', { class: 'muted small mode-draw only-touch' }, ' · Mantén pulsado para dibujar (y arrastra: flecha)'),
   );
 }
 
@@ -638,6 +651,15 @@ document.addEventListener('keydown', (ev) => {
   if (target === undefined) return;
   ev.preventDefault();
   navigate(target);
+});
+
+// Al pulsar un botón del menú desplegado (móvil), el menú se cierra.
+$('#settings').addEventListener('click', (ev) => {
+  const button = ev.target.closest('button');
+  const header = document.querySelector('header');
+  if (!button || button.classList.contains('menu-toggle') || !header.classList.contains('menu-open')) return;
+  header.classList.remove('menu-open');
+  renderSettings();
 });
 
 // ------------------------------------------------------ atajos de teclado
@@ -2961,6 +2983,7 @@ function statsView() {
       : null,
     hints.exercises ? h('p', {}, h('strong', {}, 'Pistas: '), `${hints.used} pista(s) en ${hints.needed} de ${hints.exercises} ejercicios.`) : null,
     h('h3', {}, 'Preguntas de sí o no'),
+    h('p', { class: 'muted small only-touch' }, 'No lo viste: había algo y respondiste que no. Falsa alarma: dijiste que sí y no había nada. Clave no vista: la pregunta llevaba a la jugada clave y no respondiste que sí. Señalando: proporción encontrada y tiempo medio.'),
     h('div', { class: 'table-scroll' }, h('table', { class: 'stats-table' },
       h('thead', {}, h('tr', {},
         h('th', {}, 'Pregunta'), h('th', {}, 'Veces'), h('th', {}, 'Aciertos'),

@@ -413,7 +413,6 @@ table.decision tbody tr { cursor: pointer; }
 }
 .last-fail { border-left: 4px solid var(--info); background: color-mix(in srgb, var(--info) 8%, transparent); padding: 6px 12px; margin: 0 0 10px; font-size: 0.9rem; border-radius: 2px; }
 .board-mode { flex-wrap: wrap; }
-@media (max-width: 860px), (hover: none) { .mode-draw { display: none; } }
 .eval-graph { margin: 12px 0; }
 .eval-graph svg.graph { display: block; width: 100%; height: 120px; border: 1px solid var(--border); border-radius: 4px; background: #333; cursor: pointer; margin-top: 4px; }
 .graph-area { fill: #f0f0f0; }
@@ -432,3 +431,64 @@ table.decision tbody tr { cursor: pointer; }
 .woodpecker h3 { margin: 4px 0; }
 .own-search { display: flex; gap: 8px; margin: 10px 0; }
 .own-search input { flex: 1 1 auto; min-width: 0; }
+
+/* ------------------------------------------------ móvil y pantallas táctiles */
+/* Ratón frente a dedo: textos y ayudas que solo tienen sentido con uno de los dos. */
+.only-touch { display: none; }
+@media (hover: none) and (pointer: coarse) {
+  .only-touch { display: inline; }
+  p.only-touch { display: block; }
+  .only-mouse { display: none !important; }
+}
+.board { touch-action: manipulation; -webkit-touch-callout: none; }
+.board.interactive, .board.picking, .board.drawing { touch-action: none; }
+.board.drawing { outline: 3px solid #15781b; outline-offset: 2px; }
+.stats-dialog { max-height: calc(100dvh - 48px); }
+
+/* Botón «Menú»: solo en pantallas estrechas. */
+.menu-toggle { display: none; }
+
+@media (max-width: 860px) {
+  body { padding: 10px max(12px, env(safe-area-inset-right)) 16px max(12px, env(safe-area-inset-left)); }
+  header h1 { font-size: 1.05rem; margin: 0 0 8px; }
+  .h1-long { display: none; }
+  .menu-toggle { display: inline-block; order: 1; }
+  .settings { gap: 8px; margin-bottom: 10px; }
+  /* Plegado: solo las acciones principales. */
+  header:not(.menu-open) .settings > :not(.keep) { display: none; }
+  header.menu-open .settings { border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: var(--surface); }
+  header.menu-open .settings label { flex: 1 1 100%; justify-content: space-between; }
+  header.menu-open .settings label.check { justify-content: flex-start; }
+  header.menu-open .menu-toggle { order: -1; flex: 1 1 100%; }
+  header.menu-open .settings label select { flex: 1 1 auto; }
+  header.menu-open .settings button:not(.keep) { flex: 1 1 calc(50% - 8px); }
+  main { gap: 12px; }
+  .panel { padding: 12px 14px; }
+  /* Diálogos a pantalla completa. */
+  .stats-dialog { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; margin: 0; border-radius: 0; border: none; padding: 12px max(14px, env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left)); }
+  .dialog-head { position: sticky; top: -12px; background: var(--surface); padding: 6px 0; z-index: 1; }
+}
+
+/* Móvil en horizontal: tablero a la izquierda a toda la altura y panel desplazable a la derecha. */
+@media (orientation: landscape) and (max-height: 560px) {
+  body, body.has-mobile-bar { padding-top: 6px; padding-bottom: 6px; }
+  header h1 { display: none; }
+  .settings { margin-bottom: 6px; }
+  main { grid-template-columns: auto minmax(0, 1fr); align-items: start; }
+  /* Todo cabe en la altura: la página no se desplaza, solo el panel. */
+  .board-wrap { width: calc(100dvh - 124px); min-width: 200px; }
+  .board-mode .mode-draw { display: none !important; }
+  .panel { max-height: calc(100dvh - 76px); overflow-y: auto; min-height: 0; }
+  /* Las acciones ya están en el panel, que tiene su propio desplazamiento. */
+  .mobile-bar:not([hidden]) { display: none; }
+  footer { display: none; }
+}
+
+/* Zonas de toque cómodas (44 px) con el dedo. */
+@media (pointer: coarse) {
+  button, select { min-height: 44px; }
+  button.link { min-height: 36px; padding: 6px 8px; }
+  .nav-buttons button { min-height: 44px; }
+  .findings li, .line-view li { padding-top: 8px; padding-bottom: 8px; }
+  input[type="checkbox"] { width: 22px; height: 22px; }
+}

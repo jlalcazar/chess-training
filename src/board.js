@@ -34,11 +34,18 @@ export class Board {
     this.arrows = [];
     this.shapes = []; // dibujos del usuario: { from, to } (flecha) o { from } (círculo)
     this.drawStart = null;
+    this.drag = null; // { from, x, y, pointerId, timer, drawing } mientras se pulsa una casilla
+    this.suppressClickUntil = 0;
     this.el.classList.add('board');
     this.el.addEventListener('click', (ev) => this.#click(ev));
     this.el.addEventListener('contextmenu', (ev) => ev.preventDefault());
     this.el.addEventListener('mousedown', (ev) => this.#drawDown(ev));
     this.el.addEventListener('mouseup', (ev) => this.#drawUp(ev));
+    // Arrastrar piezas (ratón y dedo) y, en pantallas táctiles, pulsación larga para dibujar.
+    this.el.addEventListener('pointerdown', (ev) => this.#pointerDown(ev));
+    this.el.addEventListener('pointermove', (ev) => this.#pointerMove(ev));
+    this.el.addEventListener('pointerup', (ev) => this.#pointerUp(ev));
+    this.el.addEventListener('pointercancel', () => this.#cancelPress());
     this.el.addEventListener('keydown', (ev) => {
       if (ev.key !== 'Escape' || !this.promotion) return;
       this.promotion = null;
@@ -272,6 +279,88 @@ export class Board {
     return ev.target.closest?.('.sq')?.dataset.square ?? null;
   }
 
+  /** La casilla bajo el puntero (con el dedo, el destino del evento es siempre la casilla inicial). */
+  #squareAtPoint(ev) {
+    const el = document.elementFromPoint(ev.clientX, ev.clientY);
+    return el && this.el.contains(el) ? el.closest('.sq')?.dataset.square ?? null : null;
+  }
+
+  #toggleShape(from, to) {
+    const same = (s) => s.from === from && (s.to ?? null) === (to === from ? null : to);
+    const i = this.shapes.findIndex(same);
+    if (i >= 0) this.shapes.splice(i, 1);
+    else this.shapes.push(to === from ? { from } : { from, to });
+    this.render();
+  }
+
+  #pointerDown(ev) {
+    if (ev.button !== 0 || this.promotion) return;
+    const from = this.#squareAt(ev);
+    if (!from) return;
+    this.#cancelPress();
+    const drag = { from, x: ev.clientX, y: ev.clientY, pointerId: ev.pointerId, timer: null, drawing: false };
+    // Pulsación larga con el dedo: empieza un dibujo (círculo, o flecha si después arrastras).
+    if (ev.pointerType !== 'mouse') {
+      drag.timer = setTimeout(() => {
+        drag.drawing = true;
+        this.el.classList.add('drawing');
+        navigator.vibrate?.(15);
+      }, 450);
+    }
+    this.drag = drag;
+  }
+
+  #pointerMove(ev) {
+    const d = this.drag;
+    if (!d || d.pointerId !== ev.pointerId || d.drawing) return;
+    // Si el dedo se mueve antes de la pulsación larga, es un arrastre, no un dibujo.
+    if (d.timer && Math.hypot(ev.clientX - d.x, ev.clientY - d.y) > 10) {
+      clearTimeout(d.timer);
+      d.timer = null;
+    }
+  }
+
+  #pointerUp(ev) {
+    const d = this.drag;
+    if (!d || d.pointerId !== ev.pointerId) return;
+    this.#cancelPress();
+    const to = this.#squareAtPoint(ev);
+    if (d.drawing) {
+      this.suppressClickUntil = performance.now() + 350;
+      if (to) this.#toggleShape(d.from, to);
+      return;
+    }
+    // Arrastre de una pieza a otra casilla: cuenta como jugarla.
+    if (!to || to === d.from || !this.interactive || this.pickMode) return;
+    const chess = this.#game();
+    const piece = chess.get(d.from);
+    if (!piece || piece.color !== chess.turn()) return;
+    this.selected = null;
+    if (!this.#tryMove(d.from, to)) this.render();
+  }
+
+  #cancelPress() {
+    if (this.drag?.timer) clearTimeout(this.drag.timer);
+    this.drag = null;
+    this.el.classList.remove('drawing');
+  }
+
+  /** Juega from→to si es legal (con el selector si corona). Devuelve false si no es legal. */
+  #tryMove(from, to) {
+    const legal = this.#game().moves({ square: from, verbose: true }).find((m) => m.to === to);
+    if (!legal) return false;
+    this.selected = null;
+    if (legal.promotion) {
+      this.promotion = { from, to, color: legal.color };
+      this.render();
+      this.el.querySelector('.promotion-choice')?.focus({ preventScroll: true });
+      return true;
+    }
+    this.render();
+    this.onMove?.({ from, to });
+    return true;
+  }
+
   // Dibujos del usuario (como chessground): botón derecho y arrastrar = flecha;
   // botón derecho sin arrastrar = círculo; repetirlo lo quita.
   #drawDown(ev) {
@@ -284,15 +373,12 @@ export class Board {
     const from = this.drawStart;
     const to = this.#squareAt(ev);
     this.drawStart = null;
-    if (!to) return;
-    const same = (s) => s.from === from && (s.to ?? null) === (to === from ? null : to);
-    const i = this.shapes.findIndex(same);
-    if (i >= 0) this.shapes.splice(i, 1);
-    else this.shapes.push(to === from ? { from } : { from, to });
-    this.render();
+    if (to) this.#toggleShape(from, to);
   }
 
   #click(ev) {
+    // El clic que sigue a un dibujo con el dedo ya está atendido.
+    if (performance.now() < this.suppressClickUntil) return;
     if (this.promotion) {
       // Elegir una pieza corona; un clic fuera del selector lo cierra sin mover.
       const choice = ev.target.closest('[data-promotion]')?.dataset.promotion;
@@ -318,22 +404,7 @@ export class Board {
     if (!this.interactive) return;
     const chess = this.#game();
     const piece = chess.get(sq);
-    if (this.selected) {
-      const legal = chess.moves({ square: this.selected, verbose: true }).find((m) => m.to === sq);
-      const from = this.selected;
-      if (legal) {
-        this.selected = null;
-        if (legal.promotion) {
-          this.promotion = { from, to: sq, color: legal.color };
-          this.render();
-          this.el.querySelector('.promotion-choice')?.focus({ preventScroll: true });
-          return;
-        }
-        this.render();
-        this.onMove?.({ from, to: sq });
-        return;
-      }
-    }
+    if (this.selected && this.#tryMove(this.selected, sq)) return;
     this.selected = piece && piece.color === chess.turn() && sq !== this.selected ? sq : null;
     this.render();
   }
