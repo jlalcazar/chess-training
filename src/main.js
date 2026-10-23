@@ -319,7 +319,8 @@ function render() {
     { class: 'puzzle-head' },
     h('div', {},
       h('span', { class: `side side-${puzzle.heroColor}` }, `Juegan ${COLOR_NAMES[puzzle.heroColor]}`),
-      h('span', { class: 'muted' }, ` · Rival: ${puzzle.lastMove?.san} · Puzzle ${puzzle.id}${done ? ` (${puzzle.rating})` : ''}`),
+      h('span', { class: 'muted' }, ` · Rival: ${puzzle.lastMove?.san}`),
+      h('span', { class: 'muted puzzle-id' }, ` · Puzzle ${puzzle.id}${done ? ` (${puzzle.rating})` : ''}`),
     ),
     nextButton(done),
   );
@@ -328,11 +329,17 @@ function render() {
   const shown = { permite: 'resolver', remate: 'resumen' }[state.step] ?? state.step;
   const idx = steps.findIndex(([id]) => id === shown);
   const stepper = h('ol', { class: 'stepper' }, steps.map(([id, label], i) => h('li', { class: i < idx ? 'done' : i === idx ? 'current' : '' }, label)));
+  // En el móvil, en lugar de todas las etiquetas: «Paso 3 de 7 · Táctica» y una barra de progreso.
+  const compactStep = idx >= 0
+    ? h('div', { class: 'step-compact', title: steps.map(([, label]) => label).join(' → ') },
+      h('div', { class: 'step-bar' }, h('div', { class: 'step-bar-fill', style: `width: ${Math.round(((idx + 1) / steps.length) * 100)}%` })),
+      h('span', { class: 'muted small' }, `${idx + 1}/${steps.length}`))
+    : null;
 
   const views = { declarar, mover, calma, cambios, vistazo, candidatas, tactica, estrategia, calculo, decision, permite, resolver, resumen, intuicion, comprobacion, remate };
   const reminder = state.step !== 'resumen' && state.step !== 'remate' ? state.lastFail ??= lastFailNote() ?? false : null;
   const own = state.puzzle.own && !reminder && state.step !== 'resumen' ? h('div', { class: 'last-fail' }, `${describeOwn(state.puzzle)}. Busca algo mejor.`) : null;
-  panel.replaceChildren(...[header, state.woodpecker ? woodpeckerLine() : null, stepper, reminder || own, views[state.step]()].filter(Boolean));
+  panel.replaceChildren(...[header, state.woodpecker ? woodpeckerLine() : null, stepper, compactStep, reminder || own, views[state.step]()].filter(Boolean));
   state.notice = null;
   if (DEBUG) panel.append(h('details', { class: 'debug' }, h('summary', {}, 'Depuración'), h('pre', {}, JSON.stringify({ ...state, plan: undefined }, null, 2))));
   syncBoard();
@@ -351,9 +358,9 @@ function nextButton(done) {
   }
   const pending = state.srsSession ? dueReviews(loadProgress(), Date.now()).filter((r) => r.id !== state.puzzle.id).length : 0;
   if (pending) {
-    return h('button', { class: done ? 'primary next' : 'next', onClick: () => startReviewSession(state.puzzle.id) }, `Siguiente repaso (${pending}) →`);
+    return h('button', { class: done ? 'primary next' : 'next', onClick: () => startReviewSession(state.puzzle.id) }, h('span', { class: 'long' }, `Siguiente repaso (${pending}) `), '→');
   }
-  return h('button', { class: done ? 'primary next' : 'next', title: done ? '' : 'Pasa a otro ejercicio sin terminar este', onClick: () => loadPuzzle() }, 'Siguiente ejercicio →');
+  return h('button', { class: done ? 'primary next' : 'next', title: done ? '' : 'Pasa a otro ejercicio sin terminar este', 'aria-label': 'Siguiente ejercicio', onClick: () => loadPuzzle() }, h('span', { class: 'long' }, 'Siguiente ejercicio '), '→');
 }
 
 // Pasos que gestionan sus propias marcas en el tablero.
@@ -662,6 +669,13 @@ $('#settings').addEventListener('click', (ev) => {
   renderSettings();
 });
 
+// En el móvil, las explicaciones largas se recortan a dos líneas: un toque las despliega.
+panel.addEventListener('click', (ev) => {
+  const p = ev.target.closest('section > h2 + p, p.hint');
+  if (!p || ev.target.closest('button, a, input, textarea')) return;
+  p.classList.toggle('expanded');
+});
+
 // ------------------------------------------------------ atajos de teclado
 
 /** El botón visible y activo que responde a una tecla (`data-key`) dentro de `root`. */
@@ -719,6 +733,8 @@ new MutationObserver(() => {
   requestAnimationFrame(() => {
     mobileBarQueued = false;
     renderMobileBar();
+    // «… más» solo en las explicaciones que de verdad quedan recortadas.
+    for (const p of panel.querySelectorAll('section > h2 + p, p.hint')) p.classList.toggle('clamped', p.scrollHeight > p.clientHeight + 2);
   });
 }).observe(panel, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled'] });
 

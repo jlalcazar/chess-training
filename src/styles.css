@@ -492,3 +492,50 @@ table.decision tbody tr { cursor: pointer; }
   .findings li, .line-view li { padding-top: 8px; padding-bottom: 8px; }
   input[type="checkbox"] { width: 22px; height: 22px; }
 }
+
+/* ------------------------------------------- móvil: interfaz simplificada */
+.step-compact { display: none; }
+@media (max-width: 860px) {
+  /* Cabecera en una fila, sin título. */
+  header h1 { display: none; }
+  body { padding-top: max(8px, env(safe-area-inset-top)); }
+  header:not(.menu-open) .settings { flex-wrap: nowrap; }
+  header:not(.menu-open) .settings > .keep { flex: 1 1 auto; padding-left: 8px; padding-right: 8px; white-space: nowrap; }
+  /* El tablero deja ver el principio del panel también en móviles bajos. */
+  .board-wrap { max-width: max(260px, calc(100dvh - 340px)); margin: 0 auto; }
+  /* Indicador del tablero en una sola línea. */
+  .board-mode { flex-wrap: nowrap; margin-top: 6px; font-size: 0.8rem; }
+  .board-mode > span:nth-child(2) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .board-mode .mode-draw { display: none !important; }
+  /* Cabecera del ejercicio compacta. */
+  .puzzle-head { flex-wrap: nowrap; align-items: center; font-size: 0.85rem; }
+  .puzzle-head > div { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .puzzle-head .next { padding: 6px 14px; }
+  .puzzle-head .next:not(.primary) .long { display: none; }
+  /* Pasos: «Paso 3 de 7» con barra, en lugar de todas las etiquetas. */
+  .stepper { display: none; }
+  .step-compact { display: flex; align-items: center; gap: 8px; margin: 8px 0 2px; }
+  .step-bar { flex: 1 1 auto; height: 4px; background: var(--border); border-radius: 2px; }
+  .puzzle-head .puzzle-id { display: none; }
+  .panel { padding: 10px 12px; }
+  /* Tabla de Decisión como tarjetas: jugada y síes arriba, lo que consigue y los botones debajo. */
+  table.decision, table.decision tbody { display: block; }
+  table.decision thead { display: none; }
+  table.decision tr { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  table.decision td { display: block; border: none; padding: 0; }
+  table.decision td.yes { grid-column: 2; grid-row: 1; font-size: 0.9rem; font-weight: 600; }
+  table.decision td.yes::after { content: ' síes'; font-weight: 400; color: var(--muted); }
+  table.decision td:nth-child(3) { grid-column: 1 / -1; }
+  table.decision td:nth-child(4) { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; }
+  table.decision td:nth-child(4) button.primary { flex: 1 1 auto; }
+  .step-bar-fill { height: 100%; background: var(--accent); border-radius: 2px; }
+  /* Textos más compactos y explicaciones largas recortadas (un toque las despliega). */
+  .panel h2 { font-size: 1.05rem; }
+  .panel h3 { font-size: 1rem; }
+  .panel section > h2 + p, .panel p.hint { display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; position: relative; }
+  .panel section > h2 + p.expanded, .panel p.hint.expanded { display: block; -webkit-line-clamp: unset; }
+  .panel p.clamped:not(.expanded)::after { content: '… más'; position: absolute; right: 0; bottom: 0; padding-left: 6px; background: var(--surface); color: var(--accent); font-style: normal; }
+  .actions { gap: 6px; margin: 10px 0; }
+  .actions button { flex: 1 1 auto; }
+  footer { display: none; }
+}
