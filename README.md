@@ -7,6 +7,19 @@ del documento de referencia (privado, no está en el repositorio).
 
 ## Uso
 
+**En línea (ordenador y móvil):** https://jlalcazar.github.io/chess-training/ (GitHub Pages; se
+publica sola con cada push a `main` y a `feature/movil`). Tus datos se guardan en el navegador de
+cada dispositivo: no salen de él.
+
+### En el móvil
+
+- La cabecera se pliega: «Nuevo ejercicio», «Repaso» y «☰ Menú» con el resto de opciones.
+- El tablero ocupa el ancho de la pantalla; en horizontal se pone a la izquierda, a toda la altura,
+  y el panel se desplaza a la derecha.
+- Puedes mover tocando origen y destino o **arrastrando** la pieza. **Mantén pulsada** una casilla
+  para dibujar un círculo (y arrastra para una flecha), como el botón derecho en el ordenador.
+- Botones de al menos 44 px y diálogos a pantalla completa.
+
 Requiere **Node.js 20.19 o superior** (recomendado 22). Comprueba tu versión con
 `node --version`; si es antigua, con [nvm](https://github.com/nvm-sh/nvm):
 `nvm install 22 && nvm use 22`.
@@ -187,6 +200,7 @@ el modo «¿Táctica o mejora?».
 | `src/evalgraph.js` | Gráfica de evaluación y clasificación de jugadas por probabilidad de ganar. |
 | `src/dom.js` | `h()`, `storage` y utilidades compartidas. |
 | `src/main.js` | Flujo de pasos e interfaz. |
+| `vite.config.js`, `.github/workflows/pages.yml` | Publicación en GitHub Pages bajo `/chess-training/` (tests, build y despliegue). |
 
 ## Próximas iteraciones
 
