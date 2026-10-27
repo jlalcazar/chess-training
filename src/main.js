@@ -2,7 +2,7 @@ import './styles.css';
 import { Chess } from 'chess.js';
 import { Board } from './board.js';
 import { $, h, storage, uciToMove } from './dom.js';
-import { BLIND_SPOTS, COLOR_NAMES, PIECE_NAMES, blindSpots, mateInOne, other, seeMove, describeIdea, evaluateMove, explainLine, findForcingIdea, forcingSweep, holes, lastMoveDiff, load, narratePly, outposts, pieceRoutes, squareControl, withTurn, worstPieces } from './analysis.js';
+import { BLIND_SPOTS, COLOR_NAMES, PIECE_NAMES, blindSpots, mateInOne, other, replyGain, describeIdea, evaluateMove, explainLine, findForcingIdea, forcingSweep, holes, lastMoveDiff, load, narratePly, outposts, pieceRoutes, squareControl, withTurn, worstPieces } from './analysis.js';
 import { DEFAULT_DEPTH, ENGINE_SOURCES, StockfishEngine, describeAdvantage, engineMove, evaluateMoves, evaluatePosition, formatScore, pvToSan, toCp, verdict, winChance } from './engine.js';
 import { ALL_QUESTIONS, emptyStats, recordExercise, summarize } from './stats.js';
 import { CONFIDENCE, GLANCE_CASES, GLANCE_SECONDS, glanceCase } from './intuition.js';
@@ -1453,17 +1453,17 @@ function startSafety(move, from) {
   } catch {
     return undefined;
   }
-  state.safety = { move: full, uci: m.from + m.to + (m.promotion ?? ''), san: m.san, fenAfter: chess.fen(), lastMove: { from: m.from, to: m.to }, from, guess: undefined, shown: false };
+  state.safety = { move: full, played: m, uci: m.from + m.to + (m.promotion ?? ''), san: m.san, fenAfter: chess.fen(), lastMove: { from: m.from, to: m.to }, from, guess: undefined, shown: false };
   return go('permite');
 }
 
-/** Lo que el rival puede hacer tras tu jugada: jaques, capturas, amenazas, mate en 1 e idea forzada. */
-function safetyAnalysis(fenAfter) {
+/** Lo que el rival puede hacer tras tu jugada (`played`): jaques, capturas, amenazas, mate en 1 e idea forzada. */
+function safetyAnalysis(fenAfter, played) {
   const chess = load(fenAfter);
   const sweep = forcingSweep(fenAfter);
   const mates = chess.moves({ verbose: true }).filter((m) => m.san.endsWith('#'));
   const idea = mates.length ? null : findForcingIdea(fenAfter, { maxMs: 300 });
-  const winning = sweep.captures.map((m) => ({ m, gain: seeMove(chess, m) })).filter((x) => x.gain > 0).sort((a, b) => b.gain - a.gain);
+  const winning = sweep.captures.map((m) => ({ m, gain: replyGain(chess, m, played) })).filter((x) => x.gain > 0).sort((a, b) => b.gain - a.gain);
   // La respuesta más peligrosa: mate, idea forzada, captura que gana material o jaque.
   const worst = mates[0] ? { uci: uciOf(mates[0]), san: mates[0].san, why: 'da mate' }
     : idea ? { uci: idea.line[0].uci, san: idea.line[0].san, why: describeIdea(idea, { moves: true }) }
@@ -1539,7 +1539,7 @@ function safetyGuess(move) {
     }
   }
   sf.guess = guess;
-  sf.analysis = safetyAnalysis(sf.fenAfter);
+  sf.analysis = safetyAnalysis(sf.fenAfter, sf.played);
   state.checked = new Set([...(state.checked ?? []), sf.uci]);
   const ok = !sf.analysis.worst || guess?.uci === sf.analysis.worst.uci;
   state.safetyLog = [...(state.safetyLog ?? []), { uci: sf.uci, guess: guess?.uci ?? null, worst: sf.analysis.worst?.uci ?? null, ok }];

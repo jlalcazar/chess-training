@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluateMove, forcingSweep, load, see, seeMove, threatenedPieces } from '../src/analysis.js';
+import { evaluateMove, forcingSweep, load, replyGain, see, seeMove, threatenedPieces } from '../src/analysis.js';
 
 test('SEE: pieza indefensa se gana entera', () => {
   const chess = load('4k3/8/8/3n4/8/8/8/3RK3 w - - 0 1');
@@ -58,4 +58,26 @@ test('el barrido solo cuenta amenazas que ganan material en el cambio', () => {
   const defended = forcingSweep('4k3/1nr5/8/8/8/2N5/8/4K3 w - - 0 1');
   // Con la torre defendida sigue siendo amenaza: caballo (3) por torre (5).
   assert.ok(defended.threats.length > 0);
+});
+
+test('cambio de damas: recapturar no cuenta como ganar la dama', () => {
+  // Puzzle KRz0m: Qxd6 Rxd6 es dama por dama (y es la jugada clave).
+  const fen = '1rb2rk1/4qpb1/p2Qp1pp/2p5/P3PN2/1P2N2P/2P2PP1/1R1R2K1 b - - 0 1';
+  const ev = evaluateMove(fen, 'Qxd6');
+  assert.ok(ev.exchange === 0, 'cambio igualado');
+  assert.ok(!ev.warnings.some((w) => w.includes('dama de d6')), 'no avisa de dama colgada');
+  const chess = load(fen);
+  const played = chess.move('Qxd6');
+  const rxd6 = chess.moves({ verbose: true }).find((m) => m.san === 'Rxd6');
+  assert.equal(replyGain(chess, rxd6, played), 0);
+});
+
+test('replyGain: la recaptura sí gana si tu captura perdía material', () => {
+  // Qxd6 exd6: dama por peón.
+  const chess = load('4k3/4p3/3p4/8/8/8/8/3QK3 w - - 0 1');
+  const played = chess.move('Qxd6');
+  const exd6 = chess.moves({ verbose: true }).find((m) => m.san === 'exd6');
+  assert.equal(replyGain(chess, exd6, played), 8);
+  const ev = evaluateMove('4k3/4p3/3p4/8/8/8/8/3QK3 w - - 0 1', 'Qxd6');
+  assert.ok(ev.warnings.some((w) => w.includes('pierde material en el cambio')));
 });

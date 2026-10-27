@@ -99,6 +99,17 @@ export function see(chess, square, color, { from } = {}) {
 /** SEE de una captura concreta (puede ser negativa: la captura pierde material). */
 export const seeMove = (chess, move) => see(chess, move.to, chess.get(move.from).color, { from: move.from });
 
+/**
+ * Lo que gana el rival con la captura `reply` justo después de `move` (en `chessAfter`).
+ * Si recaptura en la casilla donde acabas de capturar, descuenta lo que ya le quitaste:
+ * tras Dxd6 Txd6 el cambio es dama por dama, no +9 para el rival.
+ */
+export function replyGain(chessAfter, reply, move) {
+  const gain = seeMove(chessAfter, reply);
+  const recapture = move.captured && !move.isEnPassant?.() && reply.to === move.to;
+  return recapture ? gain - VALUES[move.captured] : gain;
+}
+
 /** Piezas que el rival gana en el cambio (SEE > 0), o el rey en jaque. */
 export function threatenedPieces(chess, color) {
   const out = [];
@@ -293,6 +304,8 @@ export function evaluateMove(fen, move) {
     const before = new Set(threatenedPieces(load(fen), color).map((p) => p.square));
     for (const p of threatenedPieces(chess, color)) {
       if (p.type === 'k' || (before.has(p.square) && p.square !== m.to)) continue;
+      // La pieza que acaba de capturar: el cambio ya lo cuenta `exchange` (dama por dama no es dejarla colgada).
+      if (p.square === m.to && exchange !== null && !m.isEnPassant?.()) continue;
       warnings.push(`deja ${pieceLabel(p)} ${p.reason}`);
     }
   }
