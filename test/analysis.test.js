@@ -6,6 +6,9 @@ import {
   forks,
   load,
   mateInOne,
+  toSpanish,
+  toUci,
+  uciToMove,
   pawnStructure,
   threatenedPieces,
   unprotectedPieces,
@@ -132,4 +135,15 @@ test('explainLine reconoce los temas de la solución (como el etiquetador de Lic
   assert.match(narratePly(mate[3]), /no tiene otra jugada/);
   const fork = explainLine(FORK_FEN, ['f7f1', 'g2h2', 'f8f2', 'd2f2', 'f1f2']);
   assert.ok(fork[2].themes.includes('ataqueDoble'));
+});
+
+test('uciToMove y toUci son inversas', () => {
+  assert.deepEqual(uciToMove('e7e8q'), { from: 'e7', to: 'e8', promotion: 'q' });
+  assert.equal(toUci(uciToMove('e7e8q')), 'e7e8q');
+  assert.equal(toUci(uciToMove('g1f3')), 'g1f3');
+});
+
+test('toSpanish traduce las piezas sin tocar el resto del texto', () => {
+  assert.equal(toSpanish('Rb8 Nxf7+ Kh2 Qd1# e8=Q Bb5'), 'Tb8 Cxf7+ Rh2 Dd1# e8=D Ab5');
+  assert.equal(toSpanish('Busca la torre de b8. Rival: Nf3.'), 'Busca la torre de b8. Rival: Cf3.');
 });

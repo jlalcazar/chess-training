@@ -1,4 +1,5 @@
 // Utilidades del DOM y del almacenamiento compartidas por las vistas.
+import { toSpanish } from './analysis.js';
 
 export const $ = (sel) => document.querySelector(sel);
 
@@ -10,7 +11,7 @@ export function h(tag, attrs = {}, ...children) {
     else if (k === 'class') el.className = v;
     else el.setAttribute(k, v === true ? '' : v);
   }
-  for (const c of children.flat()) if (c != null && c !== false) el.append(c instanceof Node ? c : String(c));
+  for (const c of children.flat()) if (c != null && c !== false) el.append(c instanceof Node ? c : toSpanish(String(c)));
   return el;
 }
 
@@ -33,4 +34,4 @@ export const storage = {
   },
 };
 
-export const uciToMove = (uci) => ({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+export { uciToMove } from './analysis.js';

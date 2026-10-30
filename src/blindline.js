@@ -3,9 +3,8 @@
 // comparación con la solución. También la valoración de posiciones finales
 // del paso "Calcular". Funciones puras.
 import { Chess } from 'chess.js';
-import { PIECE_NAMES, forcingSweep, load, material, other, pieceLabel, unprotectedPieces, withTurn } from './analysis.js';
+import { PIECE_NAMES, forcingSweep, load, material, other, pieceLabel, toUci, uciToMove, unprotectedPieces, withTurn } from './analysis.js';
 
-const toMove = (uci) => ({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
 
 /**
  * Recorre una línea (UCI) desde `startFen`. Devuelve las jugadas con su SAN,
@@ -18,7 +17,7 @@ export function playLine(startFen, ucis) {
   for (const uci of ucis) {
     let m;
     try {
-      m = chess.move(toMove(uci));
+      m = chess.move(uciToMove(uci));
     } catch {
       break;
     }
@@ -36,7 +35,7 @@ export function firstDeviation(startFen, ucis, solution) {
   for (let i = 0; i < ucis.length; i++) {
     let m;
     try {
-      m = chess.move(toMove(ucis[i]));
+      m = chess.move(uciToMove(ucis[i]));
     } catch {
       return i;
     }
@@ -108,7 +107,7 @@ export function rivalNode(fen, considered = []) {
   const moves = chess.moves({ verbose: true });
   const checks = moves.filter((m) => m.san.includes('+') || m.san.includes('#'));
   const captures = moves.filter((m) => m.captured && !checks.includes(m));
-  const forcing = new Set([...checks, ...captures].map((m) => m.from + m.to + (m.promotion ?? '')));
+  const forcing = new Set([...checks, ...captures].map((m) => toUci(m)));
   const seen = new Set(considered.filter((u) => forcing.has(u)));
   return { checks: checks.length, captures: captures.length, total: forcing.size, seen: seen.size };
 }

@@ -1,7 +1,7 @@
 // Por qué falló tu jugada: clasifica cada jugada incorrecta antes de avisar.
 // Idea correcta en orden equivocado, buena pieza en mala casilla, ignorar una
 // idea forzada que el rival ya tenía, dejar algo colgado u otra idea.
-import { PIECE_NAMES, describeIdea, evaluateMove, findForcingIdea, load, other, pieceLabel, withTurn } from './analysis.js';
+import { PIECE_NAMES, describeIdea, evaluateMove, findForcingIdea, load, other, pieceLabel, uciToMove, withTurn } from './analysis.js';
 
 export const ERROR_INFO = {
   orden: { label: 'Orden equivocado', advice: 'entrena la «Línea a ciegas»: escribe la línea entera antes de mover' },
@@ -11,11 +11,10 @@ export const ERROR_INFO = {
   otra: { label: 'Otra idea', advice: 'haz el barrido de jaques, capturas y amenazas antes de decidir' },
 };
 
-const toMove = (uci) => ({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
 
 function sanOf(fen, uci) {
   try {
-    return load(fen).move(toMove(uci)).san;
+    return load(fen).move(uciToMove(uci)).san;
   } catch {
     return uci;
   }
@@ -31,7 +30,7 @@ export function classifyMistake(fen, uci, solution, ply, { maxMs = 250 } = {}) {
   const expectedSan = sanOf(fen, expected);
   let played;
   try {
-    played = chess.move(toMove(uci));
+    played = chess.move(uciToMove(uci));
   } catch {
     return { kind: 'otra', text: '' };
   }
@@ -67,7 +66,7 @@ export function classifyMistake(fen, uci, solution, ply, { maxMs = 250 } = {}) {
   }
 
   // 4. Deja algo colgado.
-  const ev = evaluateMove(fen, toMove(uci));
+  const ev = evaluateMove(fen, uciToMove(uci));
   if (ev?.warnings.length) return { kind: 'colgada', text: `${played.san} ${ev.warnings[0]}.` };
 
   // 5. Otra idea distinta.

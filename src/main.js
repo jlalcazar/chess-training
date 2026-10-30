@@ -2,7 +2,7 @@ import './styles.css';
 import { Chess } from 'chess.js';
 import { Board } from './board.js';
 import { $, h, storage, uciToMove } from './dom.js';
-import { BLIND_SPOTS, COLOR_NAMES, PIECE_NAMES, blindSpots, mateInOne, other, replyGain, describeIdea, evaluateMove, explainLine, findForcingIdea, forcingSweep, holes, lastMoveDiff, load, narratePly, outposts, pieceRoutes, squareControl, withTurn, worstPieces } from './analysis.js';
+import { BLIND_SPOTS, COLOR_NAMES, PIECE_NAMES, blindSpots, mateInOne, other, replyGain, describeIdea, evaluateMove, explainLine, findForcingIdea, forcingSweep, holes, lastMoveDiff, load, narratePly, toUci, outposts, pieceRoutes, squareControl, withTurn, worstPieces } from './analysis.js';
 import { DEFAULT_DEPTH, ENGINE_SOURCES, StockfishEngine, describeAdvantage, engineMove, evaluateMoves, evaluatePosition, formatScore, pvToSan, toCp, verdict, winChance } from './engine.js';
 import { ALL_QUESTIONS, emptyStats, recordExercise, summarize } from './stats.js';
 import { CONFIDENCE, GLANCE_CASES, GLANCE_SECONDS, glanceCase } from './intuition.js';
@@ -33,7 +33,6 @@ import {
 
 // ----------------------------------------------------------------- utilidades
 
-const moveToUci = (m) => m.from + m.to + (m.promotion ?? '');
 // El tablero da la pieza al coronar; si faltara, dama (chess.js la ignora si la jugada no corona).
 const withPromotion = (m) => ({ from: m.from, to: m.to, promotion: m.promotion ?? 'q' });
 
@@ -957,7 +956,7 @@ function evaluateWithIdea(fen, move) {
 
 /** Apunta la jugada como candidata. Si está repetida o ya hay 5, deja un aviso y devuelve false. */
 function addCandidate(move) {
-  const repeated = state.candidates.find((c) => c.uci === moveToUci(withPromotion(move)) || c.uci === moveToUci(move));
+  const repeated = state.candidates.find((c) => c.uci === toUci(withPromotion(move)) || c.uci === toUci(move));
   if (repeated || state.candidates.length >= MAX_CANDIDATES) {
     state.notice = repeated ? `${repeated.san} ya está entre tus candidatas.` : `Ya tienes ${MAX_CANDIDATES} candidatas: quita una para apuntar otra.`;
     return false;
@@ -1453,7 +1452,7 @@ function startSafety(move, from) {
   } catch {
     return undefined;
   }
-  state.safety = { move: full, played: m, uci: m.from + m.to + (m.promotion ?? ''), san: m.san, fenAfter: chess.fen(), lastMove: { from: m.from, to: m.to }, from, guess: undefined, shown: false };
+  state.safety = { move: full, played: m, uci: toUci(m), san: m.san, fenAfter: chess.fen(), lastMove: { from: m.from, to: m.to }, from, guess: undefined, shown: false };
   return go('permite');
 }
 
@@ -1465,15 +1464,14 @@ function safetyAnalysis(fenAfter, played) {
   const idea = mates.length ? null : findForcingIdea(fenAfter, { maxMs: 300 });
   const winning = sweep.captures.map((m) => ({ m, gain: replyGain(chess, m, played) })).filter((x) => x.gain > 0).sort((a, b) => b.gain - a.gain);
   // La respuesta más peligrosa: mate, idea forzada, captura que gana material o jaque.
-  const worst = mates[0] ? { uci: uciOf(mates[0]), san: mates[0].san, why: 'da mate' }
+  const worst = mates[0] ? { uci: toUci(mates[0]), san: mates[0].san, why: 'da mate' }
     : idea ? { uci: idea.line[0].uci, san: idea.line[0].san, why: describeIdea(idea, { moves: true }) }
-      : winning[0] ? { uci: uciOf(winning[0].m), san: winning[0].m.san, why: `gana ${winning[0].gain} punto(s) en el cambio` }
+      : winning[0] ? { uci: toUci(winning[0].m), san: winning[0].m.san, why: `gana ${winning[0].gain} punto(s) en el cambio` }
         : null;
-  const forcing = new Set([...sweep.checks, ...sweep.captures, ...sweep.threats, ...mates].map(uciOf));
+  const forcing = new Set([...sweep.checks, ...sweep.captures, ...sweep.threats, ...mates].map(toUci));
   return { sweep, mates, idea, worst, forcing };
 }
 
-const uciOf = moveToUci;
 
 function permite() {
   const sf = state.safety;
@@ -1533,7 +1531,7 @@ function safetyGuess(move) {
     const chess = load(sf.fenAfter);
     try {
       const m = chess.move(withPromotion(move));
-      guess = { uci: uciOf(m), san: m.san };
+      guess = { uci: toUci(m), san: m.san };
     } catch {
       return;
     }
@@ -1629,7 +1627,7 @@ function onBoardMove(move) {
         return undefined;
       }
       stopTimer();
-      state.glance = { move: full, uci: m.from + m.to + (m.promotion ?? ''), san: m.san, mates: chess.isCheckmate(), ms: Date.now() - state.stepAt };
+      state.glance = { move: full, uci: toUci(m), san: m.san, mates: chess.isCheckmate(), ms: Date.now() - state.stepAt };
       return render();
     }
     case 'intuicion': {
@@ -1671,7 +1669,7 @@ function playUserMove(move) {
   } catch {
     return;
   }
-  const uci = played.from + played.to + (played.promotion ?? '');
+  const uci = toUci(played);
   // Lichess acepta cualquier mate aunque no sea la jugada registrada.
   const correct = uci === expected || chess.isCheckmate();
   log('move', { uci, expected, correct });
@@ -1743,7 +1741,7 @@ function predictReply(move) {
     return;
   }
   const expected = state.puzzle.solution[state.ply];
-  const uci = m.from + m.to + (m.promotion ?? '');
+  const uci = toUci(m);
   const ok = uci === expected || uci.slice(0, 4) === expected.slice(0, 4);
   state.predictions.push({ ply: state.ply, uci, san: m.san, ok });
   track('prediction', { uci, ok });
@@ -1882,7 +1880,7 @@ function addLineMove(entry, move) {
   } catch {
     return false;
   }
-  const uci = uciOf(m);
+  const uci = toUci(m);
   // En las jugadas del rival se apunta lo que has mirado (paso Calcular).
   if (m.color !== state.puzzle.heroColor) entry.considered[entry.ucis.length] = [...new Set([...(entry.considered[entry.ucis.length] ?? []), uci])];
   entry.ucis.push(uci);
@@ -3364,7 +3362,7 @@ async function playQuietMove(move) {
   } catch {
     return;
   }
-  const uci = uciOf(m);
+  const uci = toUci(m);
   state.quietMove = { uci, san: m.san, lastMove: { from: m.from, to: m.to } };
   track('move', { uci, ply: 0 });
   render();

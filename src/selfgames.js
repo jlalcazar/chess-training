@@ -3,7 +3,7 @@
 // Temas y Repaso. Cada error se clasifica con las 5 preguntas de
 // autoevaluación del método. Funciones puras salvo fetchUserGames.
 import { Chess } from 'chess.js';
-import { VALUES, findForcingIdea, load, other, threatenedPieces, withTurn, worstPieces } from './analysis.js';
+import { VALUES, findForcingIdea, load, other, threatenedPieces, toUci, uciToMove, withTurn, worstPieces } from './analysis.js';
 
 const API = 'https://lichess.org/api';
 
@@ -42,8 +42,6 @@ export function parseNdjson(text) {
   });
 }
 
-const toMove = (uci) => ({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
-const uciOf = (m) => m.from + m.to + (m.promotion ?? '');
 
 /** El color del usuario en la partida, o null si no juega en ella. */
 export function userColor(game, username) {
@@ -60,7 +58,7 @@ function sanLineToUci(fen, sans) {
   const out = [];
   for (const san of sans) {
     try {
-      out.push(uciOf(chess.move(san)));
+      out.push(toUci(chess.move(san)));
     } catch {
       break;
     }
@@ -81,7 +79,7 @@ export function classifyOwnMistake(fen, playedUci, solution) {
   const moveOf = (uci) => {
     const c = load(fen);
     try {
-      return c.move(toMove(uci));
+      return c.move(uciToMove(uci));
     } catch {
       return null;
     }
@@ -93,7 +91,7 @@ export function classifyOwnMistake(fen, playedUci, solution) {
   const threatened = threatenedPieces(chess, hero).filter((p) => p.type !== 'k');
   if (played && (rivalIdea || threatened.length)) {
     const after = load(fen);
-    after.move(toMove(playedUci));
+    after.move(uciToMove(playedUci));
     const stillThreat = !after.isGameOver() && (findForcingIdea(after.fen(), { maxMs: 200 }) || threatenedPieces(after, hero).some((p) => p.type !== 'k' && threatened.some((t) => t.type === p.type)));
     if (stillThreat) tags.push('propiaProfilaxis');
   }
@@ -101,7 +99,7 @@ export function classifyOwnMistake(fen, playedUci, solution) {
   const line = load(fen);
   const queenTrade = solution.some((uci) => {
     try {
-      return line.move(toMove(uci)).captured === 'q';
+      return line.move(uciToMove(uci)).captured === 'q';
     } catch {
       return false;
     }
@@ -150,10 +148,10 @@ export function gameExercises(game, username) {
     const fen = fens[i];
     const variation = a.variation ? sanLineToUci(fen, a.variation.split(/\s+/)) : [];
     let solution = variation.length ? variation : a.best ? [a.best] : [];
-    if (!solution.length || solution[0] === uciOf(played[i])) continue;
+    if (!solution.length || solution[0] === toUci(played[i])) continue;
     solution = solution.slice(0, Math.min(3, solution.length % 2 ? solution.length : solution.length - 1));
     const prev = played[i - 1];
-    const themes = ['misPartidas', judgment.theme, ...classifyOwnMistake(fen, uciOf(played[i]), solution)];
+    const themes = ['misPartidas', judgment.theme, ...classifyOwnMistake(fen, toUci(played[i]), solution)];
     out.push({
       id: `${game.id}-${i}`,
       rating: me?.rating ?? 1500,

@@ -3,9 +3,8 @@
 // rival). En un puzzle siempre hay táctica y el jugador lo sabe; aquí tiene
 // que decidirlo él. Funciones puras.
 import { Chess } from 'chess.js';
-import { findForcingIdea, load } from './analysis.js';
+import { findForcingIdea, load, uciToMove } from './analysis.js';
 
-const toMove = (uci) => ({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
 
 /**
  * Posiciones candidatas a "tranquilas" de la partida del puzzle: tras
@@ -34,7 +33,7 @@ export function quietCandidates(puzzle, { min = 2, max = 8 } = {}) {
 export function isQuietMove(fen, uci) {
   const chess = load(fen);
   try {
-    const m = chess.move(toMove(uci));
+    const m = chess.move(uciToMove(uci));
     return !m.captured && !m.promotion && !m.san.includes('+') && !m.san.includes('#');
   } catch {
     return false;

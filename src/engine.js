@@ -2,6 +2,7 @@
 // análisis de Lichess. Todas las puntuaciones se devuelven desde el punto de
 // vista de quien resuelve el ejercicio (positivo = bueno para ti).
 import { Chess } from 'chess.js';
+import { uciToMove } from './analysis.js';
 
 export const ENGINE_SOURCES = {
   stockfish: 'Stockfish 19 (WASM, en tu navegador)',
@@ -59,7 +60,7 @@ export function pvToSan(fen, pv, limit = 6) {
   const out = [];
   for (const uci of pv.slice(0, limit)) {
     try {
-      out.push(chess.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] }).san);
+      out.push(chess.move(uciToMove(uci)).san);
     } catch {
       break;
     }
@@ -209,7 +210,7 @@ export async function evaluateMoves(source, fen, moves, { engine, depth = DEFAUL
       const chess = new Chess(fen);
       let after;
       try {
-        chess.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+        chess.move(uciToMove(uci));
         after = chess.fen();
       } catch {
         continue;

@@ -25,6 +25,7 @@ import {
   threatenedPieces,
   unprotectedPieces,
   worstPieces,
+  toUci,
 } from './analysis.js';
 
 export const LEVELS = {
@@ -101,7 +102,6 @@ const list = (items) => items.join(', ');
  * con 'any', basta una.
  */
 const finding = (text, squares = [], tone = 'info', { targets = [], match = 'any', move = null } = {}) => ({ text, squares, tone, targets, match, move });
-const uci = (m) => m.from + m.to + (m.promotion ?? '');
 
 /**
  * Responde a una pregunta del método. Devuelve { yes, findings } desde el punto de vista de `hero`.
@@ -118,13 +118,13 @@ export function answerQuestion(id, fen, hero, { maxMs = 400 } = {}) {
       const mine = mateInOne(fen, hero);
       const theirs = mateInOne(fen, enemy);
       // El objetivo es la jugada de mate: se "juega" señalando origen y destino.
-      for (const m of mine) findings.push(finding(`Tienes mate en 1: ${m.san}`, [m.from, m.to], 'good', { targets: [m.from, m.to], match: 'all', move: uci(m) }));
+      for (const m of mine) findings.push(finding(`Tienes mate en 1: ${m.san}`, [m.from, m.to], 'good', { targets: [m.from, m.to], match: 'all', move: toUci(m) }));
       const longMate = mine.length ? null : findForcingIdea(fen, { maxMs });
       if (longMate?.mate) {
         const first = longMate.line[0].uci;
         findings.push(finding(`Hay un mate forzado en ${longMate.moves} jugadas: ${describeIdea(longMate, { moves: false })}`, [], 'good', { targets: [first.slice(0, 2), first.slice(2, 4)], match: 'all', move: first }));
       }
-      for (const m of theirs) findings.push(finding(`El rival amenaza mate: ${m.san}`, [m.from, m.to], 'bad', { targets: [m.from, m.to], match: 'all', move: uci(m) }));
+      for (const m of theirs) findings.push(finding(`El rival amenaza mate: ${m.san}`, [m.from, m.to], 'bad', { targets: [m.from, m.to], match: 'all', move: toUci(m) }));
       const checks = load(fen).moves({ verbose: true }).filter((m) => m.san.includes('+') && !m.san.endsWith('#'));
       if (!mine.length && checks.length) {
         findings.push(finding(`No hay mate inmediato, pero tienes ${checks.length} jaque(s) para revisar: ${list(checks.map((m) => m.san))}`, checks.flatMap((m) => [m.from, m.to]), 'info'));
@@ -223,7 +223,7 @@ export function answerQuestion(id, fen, hero, { maxMs = 400 } = {}) {
       const ksMine = kingSafety(chess, hero);
       if (m.queens && ksMine && ksMine.shield <= 1) findings.push(finding('Tu rey está expuesto: cambiar damas reduce el peligro', [ksMine.square], 'info'));
       for (const t of availableTrades(fen)) {
-        findings.push(finding(`Cambio disponible: ${t.san} (${PIECE_NAMES[t.piece]} por ${PIECE_NAMES[t.captured]})`, [t.from, t.to], diff > 0 ? 'good' : diff < 0 ? 'bad' : 'info', { targets: [t.from, t.to], match: 'all', move: uci(t) }));
+        findings.push(finding(`Cambio disponible: ${t.san} (${PIECE_NAMES[t.piece]} por ${PIECE_NAMES[t.captured]})`, [t.from, t.to], diff > 0 ? 'good' : diff < 0 ? 'bad' : 'info', { targets: [t.from, t.to], match: 'all', move: toUci(t) }));
       }
       const mine = worstPieces(fen, hero)[0];
       const theirs = worstPieces(fen, enemy).at(-1);

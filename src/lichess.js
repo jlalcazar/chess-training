@@ -1,6 +1,7 @@
 // Cliente mínimo de la API pública de puzzles de Lichess (no requiere token).
 // Docs: https://lichess.org/api#tag/Puzzles
 import { Chess } from 'chess.js';
+import { uciToMove } from './analysis.js';
 
 const API = 'https://lichess.org/api';
 
@@ -147,7 +148,7 @@ export function parsePuzzle(data) {
   const first = puzzle.solution[0];
   const check = new Chess(fen);
   try {
-    check.move({ from: first.slice(0, 2), to: first.slice(2, 4), promotion: first[4] });
+    check.move(uciToMove(first));
   } catch {
     throw new LichessError(`La solución ${first} no es legal en la posición reconstruida (${fen}).`);
   }

@@ -20,6 +20,18 @@ export const coords = (sq) => [FILES.indexOf(sq[0]), Number(sq[1]) - 1];
 export const toSquare = (f, r) => (f >= 0 && f < 8 && r >= 0 && r < 8 ? FILES[f] + (r + 1) : null);
 export const pieceLabel = (p) => `${PIECE_NAMES[p.type]} de ${p.square}`;
 
+/** "e7e8q" → { from: 'e7', to: 'e8', promotion: 'q' } (la notación UCI de Lichess y Stockfish). */
+export const uciToMove = (uci) => ({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+/** La inversa: una jugada de chess.js → "e7e8q". */
+export const toUci = (m) => m.from + m.to + (m.promotion ?? '');
+
+const SPANISH_PIECES = { K: 'R', Q: 'D', R: 'T', B: 'A', N: 'C' };
+/** Pasa las jugadas SAN de un texto a notación española: "Rb8 Nxf7+ e8=Q" → "Tb8 Cxf7+ e8=D". */
+export const toSpanish = (text) =>
+  text
+    .replace(/\b[KQRBN](?=[a-h1-8]?x?[a-h][1-8])/g, (p) => SPANISH_PIECES[p])
+    .replace(/=([QRBN])/g, (_, p) => `=${SPANISH_PIECES[p]}`);
+
 /** Devuelve el mismo FEN con el turno cambiado (como si se pasara turno). */
 export function withTurn(fen, color) {
   const parts = fen.split(' ');
@@ -311,7 +323,7 @@ export function evaluateMove(fen, move) {
   }
 
   const yes = new Set(tags.map((t) => t.q));
-  return { move: m, san: m.san, uci: m.from + m.to + (m.promotion ?? ''), tags, warnings, yesCount: yes.size, mate: m.san.endsWith('#'), exchange };
+  return { move: m, san: m.san, uci: toUci(m), tags, warnings, yesCount: yes.size, mate: m.san.endsWith('#'), exchange };
 }
 
 // ----------------------------- Estrategia -----------------------------
@@ -753,7 +765,7 @@ export function findForcingIdea(fen, { firstMove, maxPly = 7, maxNodes = 40000, 
   const gain = mate ? Infinity : best.score - base;
   // Una idea "de varias jugadas" necesita al menos dos jugadas propias.
   if ((!mate && gain < minGain) || best.pv.length < 3) return null;
-  return describeLine(fen, best.pv.map((m) => m.from + m.to + (m.promotion ?? '')));
+  return describeLine(fen, best.pv.map(toUci));
 }
 
 /**
@@ -772,7 +784,7 @@ export function describeLine(fen, ucis) {
     const before = chess.fen();
     let m;
     try {
-      m = chess.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+      m = chess.move(uciToMove(uci));
     } catch {
       break;
     }
@@ -853,7 +865,7 @@ export function blindSpots(fen, uci, candidates = []) {
   const color = chess.turn();
   let m;
   try {
-    m = chess.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+    m = chess.move(uciToMove(uci));
   } catch {
     return [];
   }
@@ -919,7 +931,7 @@ export function explainLine(fen, ucis) {
     const legal = chess.moves().length;
     let m;
     try {
-      m = chess.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
+      m = chess.move(uciToMove(uci));
     } catch {
       break;
     }
