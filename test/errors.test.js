@@ -33,7 +33,8 @@ test('deja algo colgado, u otra idea', () => {
 test('fallo de profilaxis: el rival ya tenía una idea forzada', () => {
   // Las negras amenazan Qf1+ con ataque doble (S14en visto desde las blancas).
   const fen = '5r1k/ppp2q2/7p/4P1p1/1P1P4/2P3RP/P2Q2K1/8 w - - 3 36';
-  const r = classifyMistake(fen, 'a2a3', ['g3f3'], 0);
+  // Búsqueda de ~800 ms: con el límite normal (250 ms) una máquina lenta o cargada no llegaría.
+  const r = classifyMistake(fen, 'a2a3', ['g3f3'], 0, { maxMs: 5000 });
   assert.equal(r.kind, 'profilaxis', r.text);
 });
 

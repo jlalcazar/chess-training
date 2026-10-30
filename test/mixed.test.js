@@ -23,7 +23,8 @@ test('jugada tranquila y posición de mejorar', () => {
   assert.equal(isQuietPosition(start, [{ score: { cp: 250 }, pv: ['e2e4'] }, { score: { cp: 10 }, pv: ['d2d4'] }]), false, 'una sola jugada buena');
   // Con una ganancia forzada no es tranquila aunque el motor diga otra cosa.
   const fork = '5r1k/ppp2q2/7p/4P1p1/1P1P4/2P3RP/P2Q2K1/8 b - - 3 36';
-  assert.equal(isQuietPosition(fork, [{ score: { cp: 100 }, pv: ['a7a6'] }]), false);
+  // La búsqueda tarda ~800 ms: con el límite normal (300 ms) una máquina lenta o cargada no llegaría.
+  assert.equal(isQuietPosition(fork, [{ score: { cp: 100 }, pv: ['a7a6'] }], { maxMs: 5000 }), false);
 });
 
 test('combinaciones inventadas y tácticas no vistas', () => {

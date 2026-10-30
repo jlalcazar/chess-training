@@ -51,7 +51,7 @@ export function isQuietPosition(fen, top, opts) {
 }
 
 /** Por qué una posición no sirve como "tranquila" (null si sirve). */
-export function quietReason(fen, top, { maxCp = 300, maxGap = 150 } = {}) {
+export function quietReason(fen, top, { maxCp = 300, maxGap = 150, maxMs = 300 } = {}) {
   const best = top?.[0];
   if (!best?.pv?.length) return 'sin evaluación';
   if (best.score.mate != null) return 'hay mate';
@@ -60,7 +60,7 @@ export function quietReason(fen, top, { maxCp = 300, maxGap = 150 } = {}) {
   // Una única jugada muy superior a las demás suele esconder una táctica (aunque sea tranquila).
   const second = top[1];
   if (second && (second.score.mate != null || best.score.cp - second.score.cp > maxGap)) return 'solo hay una jugada buena';
-  if (findForcingIdea(fen, { maxMs: 300 })) return 'hay una ganancia forzada';
+  if (findForcingIdea(fen, { maxMs })) return 'hay una ganancia forzada';
   return null;
 }
 
