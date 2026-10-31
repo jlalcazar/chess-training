@@ -19,6 +19,9 @@ cada dispositivo: no salen de él.
 - Puedes mover tocando origen y destino o **arrastrando** la pieza. **Mantén pulsada** una casilla
   para dibujar un círculo (y arrastra para una flecha), como el botón derecho en el ordenador.
 - Botones de al menos 44 px y diálogos a pantalla completa.
+- Lo importante de cada paso (título, botón principal y «Ver la posición anterior») entra en la
+  primera pantalla sin desplazarse: barra de progreso en la fila de la cabecera, indicador del
+  tablero oculto cuando está quieto y acciones principales fijas abajo.
 
 Requiere **Node.js 20.19 o superior** (recomendado 22). Comprueba tu versión con
 `node --version`; si es antigua, con [nvm](https://github.com/nvm-sh/nvm):
@@ -40,11 +43,11 @@ Parámetros de URL útiles para depurar:
 
 **Modo "con tiempo"** (proceso completo):
 
-1. **Calma**: 30 s de respiración (inhalar 7 s, exhalar 5 s) mirando la posición sin calcular.
-   - *(opcional)* **¿Qué ha cambiado con la jugada del rival?**: señalas en el tablero qué ataca
+1. **Antes de buscar jugadas** (pasos opcionales):
+   - **¿Qué ha cambiado con la jugada del rival?**: señalas en el tablero qué ataca
      ahora la pieza que se movió, qué dejó de defender y qué líneas abrió o cortó; la app lo corrige
      (verde, rojo, gris) y en el resumen lo enlaza con la jugada clave.
-   - *(opcional)* **Golpe de vista**: 10 s para la primera jugada que salga, con tu seguridad
+   - **Golpe de vista**: 10 s para la primera jugada que salga, con tu seguridad
      (Segura, Probable, Corazonada). Entra como candidata 1 («intuición»).
 2. **Candidatas**: hasta 5 jugadas marcadas en el tablero, sin calcular variantes.
 3. **Preguntas tácticas** (siempre, para los dos colores): ¿mate?, ¿piezas desprotegidas?,

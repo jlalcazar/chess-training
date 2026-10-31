@@ -165,11 +165,6 @@ table.decision ul { margin: 0; padding-left: 16px; }
 button.toggle.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 .adding, .notice { color: var(--accent); font-weight: 600; }
 
-.breath { display: flex; flex-direction: column; align-items: center; gap: 6px; margin: 16px 0; }
-.breath-circle { width: 90px; height: 90px; border-radius: 50%; background: var(--accent); opacity: 0.6; }
-.breath-circle.inhale { transform: scale(1.3); transition: transform 7s ease-in-out; }
-.breath-circle.exhale { transform: scale(0.7); transition: transform 5s ease-in-out; }
-.breath-phase { font-weight: 600; font-size: 1.1rem; }
 
 .countdown { font-size: 2.5rem; font-weight: 700; text-align: center; }
 .countdown.urgent { color: var(--bad); }
@@ -532,10 +527,32 @@ table.decision tbody tr { cursor: pointer; }
   /* Textos más compactos y explicaciones largas recortadas (un toque las despliega). */
   .panel h2 { font-size: 1.05rem; }
   .panel h3 { font-size: 1rem; }
-  .panel section > h2 + p, .panel p.hint { display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; position: relative; }
-  .panel section > h2 + p.expanded, .panel p.hint.expanded { display: block; -webkit-line-clamp: unset; }
+  .panel section > h2 + p, .panel .prev-pos + p, .panel p.hint { display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; position: relative; }
+  .panel section > h2 + p.expanded, .panel .prev-pos + p.expanded, .panel p.hint.expanded { display: block; -webkit-line-clamp: unset; }
   .panel p.clamped:not(.expanded)::after { content: '… más'; position: absolute; right: 0; bottom: 0; padding-left: 6px; background: var(--surface); color: var(--accent); font-style: normal; }
   .actions { gap: 6px; margin: 10px 0; }
   .actions button { flex: 1 1 auto; }
   footer { display: none; }
+}
+
+/* ------------------------------------- móvil: lo importante en la primera pantalla */
+@media (max-width: 860px) {
+  main { gap: 8px; }
+  .settings { margin-bottom: 8px; }
+  /* Indicador del tablero: fuera cuando el tablero está quieto; si no, una línea fina. */
+  .board-mode[data-kind="none"] { display: none !important; }
+  .board-mode { margin-top: 4px; gap: 6px; }
+  /* Cabecera del ejercicio: texto, barra de progreso y «→» en una sola fila. */
+  .puzzle-head { gap: 8px; }
+  .puzzle-head > div:first-child { flex: 0 1 auto; }
+  .puzzle-head .step-compact { flex: 1 1 40px; margin: 0; min-width: 40px; }
+  .puzzle-head .next { min-height: 36px; padding: 4px 12px; }
+  .panel h2 { margin: 6px 0 4px; }
+  .panel section > h2 + p, .panel section > p { margin: 4px 0; }
+  /* «Ver la posición anterior» justo bajo el título, en una línea. */
+  .prev-pos { margin: 4px 0 6px; }
+  .prev-pos button { flex: 0 1 auto; white-space: nowrap; }
+  .prev-pos .muted { display: none; }
+  .pick-help { display: none; }
+  .pointing p.small { margin: 4px 0; }
 }

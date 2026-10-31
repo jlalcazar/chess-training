@@ -61,7 +61,6 @@ export const MODES = {
   mixto: '¿Táctica o mejora? (con posiciones tranquilas)',
 };
 
-export const BREATHING = { inhale: 7, exhale: 5, total: 30 };
 export const MAX_CANDIDATES = 5;
 export const INTUITION_SECONDS = 20;
 
