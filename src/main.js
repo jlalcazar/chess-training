@@ -10,6 +10,7 @@ import { PHASE_NAMES, fixation, keyFirstSeen, phaseDurations } from './timeline.
 import { ERROR_INFO, classifyMistake, errorAdvice } from './errors.js';
 import { PROMOTION, STAGES, ladder, planQuestions, updateScaffold } from './scaffold.js';
 import { classifyMove, graphPaths } from './evalgraph.js';
+import { GOOD_LOSS, decisionLoss, decisionSummary, recordDecision } from './decisions.js';
 import { isQuietPosition, quietCandidates, quietReason, recordMixed } from './mixed.js';
 import { SELF_QUESTIONS, describeOwn, fetchUserGames, gameExercises, selfSummary } from './selfgames.js';
 import { BURST_SECONDS, PACES, WOODPECKER_SIZE, addPuzzle, balancePositions, burstSummary, cycleMode, cycleNumber, gamePositions, newWoodpecker, nextInCycle, nextPace, recordBurst, recordWoodpecker, rng, shuffle, startNextCycle, woodpeckerStatus } from './drills.js';
@@ -99,6 +100,7 @@ function newState(puzzle, modeOverride = null, mixed = null) {
     lastMove: puzzle.lastMove,
     mistakes: [],
     predictions: [], // respuestas del rival que has predicho (no cuentan como errores)
+    decisions: [], // pérdida (puntos de probabilidad de ganar) de cada jugada que juegas
     feedback: null,
     revealed: false,
     hint: 0, // nivel de pista para la jugada actual (0-3)
@@ -398,7 +400,7 @@ function syncBoard() {
   else if (step !== 'resumen') board.setPosition(state.playFen, { orientation: state.puzzle.heroColor, lastMove: state.lastMove });
   // En Táctica y Estrategia una jugada en el tablero se apunta como candidata (no se juega).
   const noting = ['candidatas', 'tactica', 'estrategia', 'decision'].includes(step);
-  board.setInteractive((noting || ['intuicion', 'resolver'].includes(step) || (step === 'mover' && !state.quietMove) || (step === 'vistazo' && !state.glance) || (step === 'permite' && state.safety?.guess === undefined)) && !(step === 'resolver' && (state.revealed || state.ply >= state.puzzle.solution.length)));
+  board.setInteractive((noting || ['intuicion', 'resolver'].includes(step) || (step === 'mover' && !state.quietMove) || (step === 'vistazo' && !state.glance) || (step === 'permite' && state.safety?.guess === undefined)) && !(step === 'resolver' && (state.grading || state.revealed || state.ply >= state.puzzle.solution.length)));
   board.setPickMode(Boolean(state.pointing));
   if (noting && !state.pointing && !state.routeShown) {
     board.setArrows(state.candidates.map((c, i) => ({ from: c.move.from, to: c.move.to, tone: step === 'decision' && state.selectedCandidate === i ? 'good' : 'candidate' })));
@@ -445,6 +447,7 @@ function clickMode() {
     case 'permite':
       return state.safety?.guess === undefined ? { kind: 'rival', text: 'Mueve por el rival' } : { kind: 'none', text: 'Tablero quieto' };
     case 'resolver':
+      if (state.grading) return { kind: 'none', text: 'Evaluando…' };
       if (state.revealed || state.ply >= state.puzzle.solution.length) return { kind: 'none', text: 'Tablero quieto' };
       if (state.predict) return { kind: 'rival', text: 'Mueve por el rival' };
       return { kind: 'move', text: 'Se juega' };
@@ -1642,12 +1645,14 @@ function playUserMove(move) {
     const ev = evaluateMove(state.playFen, full);
     // Antes de avisar: por qué falló (orden, casilla, profilaxis, colgada u otra).
     const why = classifyMistake(state.playFen, uci, puzzle.solution, state.ply);
-    state.mistakes.push({ ply: state.ply, fen: state.playFen, uci, san: played.san, expected, ev, kind: why.kind, why: why.text });
-    saveProgress(false);
-    state.feedback = { type: 'ko', ev, why };
+    const mistake = { ply: state.ply, fen: state.playFen, uci, san: played.san, expected, ev, kind: why.kind, why: why.text };
+    state.feedback = { type: 'ko', ev, why, grading: true };
+    state.grading = true;
     render();
+    gradeMove(mistake);
     return;
   }
+  addDecision(0);
   state.feedback = { type: 'ok', san: played.san };
   state.ply++;
   state.hint = 0;
@@ -1666,6 +1671,44 @@ function playUserMove(move) {
     return;
   }
   playRivalReply();
+}
+
+/** Apunta la pérdida de una jugada tuya (0 si es la mejor) en el ejercicio y en tus estadísticas. */
+function addDecision(loss) {
+  state.decisions.push(loss);
+  const stats = storage.get('stats', emptyStats());
+  storage.set('stats', { ...stats, decisions: recordDecision(stats.decisions, loss) });
+}
+
+/**
+ * Puntúa con Stockfish una jugada que no es la del ejercicio: cuánta
+ * probabilidad de ganar pierde frente a la mejor. Si pierde muy poco, vale
+ * como buena y no cuenta como fallo; si no (o si el motor no carga), es un fallo.
+ */
+async function gradeMove(mistake) {
+  const current = state;
+  const fb = state.feedback;
+  let grade = null;
+  try {
+    engine ??= new StockfishEngine();
+    const r = await evaluateMoves('stockfish', mistake.fen, [mistake.uci], { engine, depth: 12 });
+    const row = r.rows[0];
+    if (row) grade = { ...classifyMove(winChance(r.best.score), winChance(row.score)), loss: decisionLoss(r.best.score, row.score) };
+  } catch (err) {
+    console.error(err);
+  }
+  if (state !== current) return;
+  state.grading = false;
+  const good = Boolean(grade) && grade.loss <= GOOD_LOSS;
+  mistake.grade = grade;
+  if (grade) addDecision(grade.loss);
+  if (!good) {
+    state.mistakes.push(mistake);
+    saveProgress(false);
+  }
+  Object.assign(fb, { grading: false, grade, good });
+  log('grade', { uci: mistake.uci, grade, good });
+  if (['resolver', 'resumen'].includes(state.step)) render();
 }
 
 /** ¿Se pide predecir la respuesta del rival? Por defecto, desde el nivel Intermedio. */
@@ -1767,9 +1810,12 @@ function resolver() {
       settings.lineSweep ? lineSweepView() : null,
     );
   } else if (feedback.type === 'ko') {
-    const { ev, why } = feedback;
-    children.push(
+    const { ev, why, grade, good, grading } = feedback;
+    if (good) children.push(h('p', { class: 'ok' }, `≈ ${ev.san} también vale (pierde ${Math.round(grade.loss)} %). No cuenta como fallo: busca la del ejercicio.`));
+    else children.push(
       h('p', { class: 'ko' }, `✘ ${ev.san} no es la jugada.`),
+      grading ? h('p', { class: 'muted small' }, 'Evaluando tu jugada…')
+        : grade ? h('p', {}, h('span', { class: `badge tone-${grade.tone}` }, grade.label), ` Pierdes ${Math.round(grade.loss)} % de probabilidad de ganar.`) : null,
       why ? h('p', { class: 'why' }, h('span', { class: `badge kind-${why.kind}` }, ERROR_INFO[why.kind].label), ' ', why.text) : null,
       ev.warnings.length ? h('ul', { class: 'warnings' }, ev.warnings.map((w) => h('li', {}, `⚠ ${w}`))) : h('p', { class: 'muted' }, 'Hay algo más fuerte.'),
       h('p', {}, 'Busca jaques, capturas y amenazas, tuyos y del rival.'),
@@ -2101,6 +2147,7 @@ function applyBlind() {
   for (let i = 0; i < until; i++) {
     const m = chess.move(uciToMove(ucis[i]));
     if (m.color !== state.puzzle.heroColor) state.predictions.push({ ply: state.ply, uci: ucis[i], san: m.san, ok: true, blind: true });
+    else addDecision(0);
     track('move', { uci: ucis[i], ply: state.ply, ok: true, blind: true });
     state.ply++;
     state.playFen = chess.fen();
@@ -2348,10 +2395,11 @@ function resumen() {
       : null,
     missed.length ? h('div', {}, h('p', {}, 'Preguntas que no acertaste:'), h('ul', {}, missed.map(([id]) => h('li', {}, questionText(id))))) : null,
     progressNote(),
+    decisionNote(),
     state.hintsUsed ? h('p', { class: 'muted small' }, `Pistas: ${state.hintsUsed}.`) : null,
     state.predictions.length ? h('p', { class: 'small' }, h('strong', {}, 'Rival previsto: '), `${state.predictions.filter((p) => p.ok).length} de ${state.predictions.length}`,
       state.predictions.some((p) => !p.ok) ? h('span', { class: 'muted' }, ` (esperabas ${state.predictions.filter((p) => !p.ok).map((p) => p.san).join(', ')})`) : null) : null,
-    state.mistakes.length ? h('div', { class: 'why-list' }, h('strong', {}, 'Por qué fallaron tus jugadas:'), h('ul', {}, state.mistakes.map((m) => h('li', {}, h('span', { class: `badge kind-${m.kind}` }, ERROR_INFO[m.kind]?.label ?? '—'), ' ', m.why ?? m.san)))) : null,
+    state.mistakes.length ? h('div', { class: 'why-list' }, h('strong', {}, 'Por qué fallaron tus jugadas:'), h('ul', {}, state.mistakes.map((m) => h('li', {}, h('span', { class: `badge kind-${m.kind}` }, ERROR_INFO[m.kind]?.label ?? '—'), ' ', m.why ?? m.san, m.grade ? h('span', { class: 'muted small' }, ` (pierde ${Math.round(m.grade.loss)} %)`) : null)))) : null,
     h('p', { class: 'muted small' }, `Lichess ${puzzle.rating} · ${solvedCount} de ${history.length} resueltos`),
     finaleButton(),
     h('p', {}, h('a', { href: puzzle.puzzleUrl, target: '_blank', rel: 'noopener' }, 'Ver en Lichess'), ' · ', h('a', { href: puzzle.gameUrl, target: '_blank', rel: 'noopener' }, 'Partida')),
@@ -2359,6 +2407,14 @@ function resumen() {
     // Al final del resumen (y en la barra del móvil): el siguiente ejercicio.
     h('div', { class: 'actions' }, nextButton(true)),
   );
+}
+
+/** Calidad de tus jugadas en este ejercicio: cuántas y cuánta probabilidad de ganar perdieron de media. */
+function decisionNote() {
+  const d = state.decisions;
+  if (!d.length) return null;
+  const mean = d.reduce((a, b) => a + b, 0) / d.length;
+  return h('p', { class: mean <= GOOD_LOSS ? 'ok' : 'ko' }, h('strong', {}, 'Tus decisiones: '), `${count(d.length, 'jugada')} · pérdida media ${mean.toFixed(1)} %`);
 }
 
 // ------------------------------------------- evaluación con motor (repaso)
@@ -2924,7 +2980,7 @@ function statsView() {
   const raw = storage.get('stats', emptyStats());
   const summary = summarize(raw);
   const { rows, hardest, exercises, candidates, blindSpots: blind, hints } = summary;
-  const extra = [intuitionStats(summary.intuition), errorStats(summary), keySourceStats(summary), predictionStats(summary.predictions), ladderStats(raw), burstStats(raw), mixedStats(raw)].filter(Boolean);
+  const extra = [decisionStats(raw), intuitionStats(summary.intuition), errorStats(summary), keySourceStats(summary), predictionStats(summary.predictions), ladderStats(raw), burstStats(raw), mixedStats(raw)].filter(Boolean);
   if (!rows.length) {
     return h('div', {}, h('p', {}, 'Aún no hay datos: termina un ejercicio «con tiempo» respondiendo a las preguntas.'), ...extra);
   }
@@ -2982,6 +3038,19 @@ function statsView() {
       ? h('ul', { class: 'open-stats' }, open.map((r) => h('li', {}, `${r.text} `, h('span', { class: 'muted small' }, `${times(r.asked)}, con idea ${times(r.withIdea)}${r.key ? ` · clave en ${r.key}` : ''}`))))
       : null,
     ...extra,
+  );
+}
+
+/** Calidad de tus decisiones: pérdida media de probabilidad de ganar por jugada. */
+function decisionStats(raw) {
+  const d = decisionSummary(raw.decisions);
+  if (!d) return null;
+  const trend = d.before == null ? '' : d.last < d.before - 0.5 ? ' ▼ mejoras' : d.last > d.before + 0.5 ? ' ▲ empeoras' : ' = igual';
+  return h('div', { class: 'stats-block' },
+    h('h3', {}, 'Tus decisiones'),
+    h('p', { class: 'callout' }, h('strong', {}, `Pérdida media: ${d.avg.toFixed(1)} %`), ` en ${count(d.n, 'jugada')}`),
+    h('p', { class: 'small' }, `Últimas ${d.lastN}: ${d.last.toFixed(1)} %${d.before == null ? '' : ` (antes ${d.before.toFixed(1)} %${trend})`} · buenas: ${pct(d.goodRate)}`),
+    h('p', { class: 'muted small' }, `Probabilidad de ganar que pierde cada jugada tuya frente a la mejor de Stockfish. Hasta ${GOOD_LOSS} % es buena.`),
   );
 }
 
@@ -3340,6 +3409,10 @@ async function playQuietMove(move) {
   state.quietMove.row = row;
   state.quietMove.verdict = loss == null ? null : verdict(loss, row.score);
   state.quietMove.good = loss == null ? null : loss <= 50;
+  if (row) {
+    state.quietMove.loss = decisionLoss(best.score, row.score);
+    addDecision(state.quietMove.loss);
+  }
   recordMixedStat({ kind: 'quiet', declared: state.mixed.declared, goodMove: state.quietMove.good });
   state.finished = true;
   go('resumen');
@@ -3359,7 +3432,7 @@ function resumenQuiet() {
     h('p', { class: mixed.declared === 'quiet' ? 'ok' : 'ko' }, mixed.declared === 'quiet'
       ? 'Dijiste «toca mejorar»: bien, no había táctica.'
       : 'Dijiste «hay táctica», pero no había: cuidado con inventar combinaciones.'),
-    q ? h('p', {}, h('strong', {}, `Tu jugada: ${q.san} `), q.verdict ? h('span', { class: `badge tone-${q.verdict.tone}` }, q.verdict.label) : h('span', { class: 'muted' }, 'sin evaluación'), q.row ? ` (${formatScore(q.row.score)}, ${describeAdvantage(q.row.score)})` : '') : null,
+    q ? h('p', {}, h('strong', {}, `Tu jugada: ${q.san} `), q.verdict ? h('span', { class: `badge tone-${q.verdict.tone}` }, q.verdict.label) : h('span', { class: 'muted' }, 'sin evaluación'), q.row ? ` (${formatScore(q.row.score)}, ${describeAdvantage(q.row.score)}${q.loss != null ? `; pierde ${Math.round(q.loss)} %` : ''})` : '') : null,
     h('div', { class: 'top-moves' }, h('strong', {}, 'Las mejores'), h('ol', {}, top.map((t) => h('li', {}, h('strong', {}, t.san[0]), ` ${formatScore(t.score)} `, h('span', { class: 'muted small' }, t.san.slice(1).join(' ')))))),
     h('p', { class: 'small' }, 'Aquí cuentan las preguntas estratégicas: debilidades, peor pieza y plan del rival.'),
     h('p', {}, h('a', { href: puzzle.gameUrl, target: '_blank', rel: 'noopener' }, 'Partida')),

@@ -36,6 +36,14 @@ npm test         # tests de la lógica (análisis, método, progreso, motor y m�
 npm run build    # versión estática en dist/
 ```
 
+### Calidad de tus decisiones
+
+Cada jugada que juegas se puntúa con Stockfish por la **probabilidad de ganar que pierde** frente a
+la mejor (0 % si es la del ejercicio). Si tu jugada no es la del puzzle pero pierde un 5 % o menos,
+«también vale»: no cuenta como fallo y sigues buscando la del ejercicio. Si pierde más, cuenta como
+fallo y ves cuánto («Error: pierdes 14 %»). El resumen muestra la pérdida media del ejercicio y
+Estadísticas, la pérdida media por jugada y su tendencia (últimas 20 frente a las 20 anteriores).
+
 Parámetros de URL útiles para depurar:
 
 - `?puzzle=S14en` carga un puzzle concreto de Lichess.
