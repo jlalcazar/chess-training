@@ -14,12 +14,14 @@ cada dispositivo: no salen de él.
 ### En el móvil
 
 - La cabecera se pliega: «Nuevo ejercicio», «Repaso» y «☰ Menú» con el resto de opciones.
+- Textos cortos en todas las pantallas: una frase por paso, botones de una o dos palabras y el
+  número de pregunta en el título («4. Táctica · 1/4»).
 - El tablero ocupa el ancho de la pantalla; en horizontal se pone a la izquierda, a toda la altura,
   y el panel se desplaza a la derecha.
 - Puedes mover tocando origen y destino o **arrastrando** la pieza. **Mantén pulsada** una casilla
   para dibujar un círculo (y arrastra para una flecha), como el botón derecho en el ordenador.
 - Botones de al menos 44 px y diálogos a pantalla completa.
-- Lo importante de cada paso (título, botón principal y «Ver la posición anterior») entra en la
+- Lo importante de cada paso (título, botón principal y «Posición anterior») entra en la
   primera pantalla sin desplazarse: barra de progreso en la fila de la cabecera, indicador del
   tablero oculto cuando está quieto y acciones principales fijas abajo.
 
@@ -64,20 +66,19 @@ Parámetros de URL útiles para depurar:
      mirado 1 de 3»), y valoras el final (+−, ±, =, ∓, −+).
 5. **Decisión**: cada candidata muestra cuántos "síes" consigue, qué deja colgado y si abre
    una **idea forzada de varias jugadas** (p. ej. "da jaque → ataque doble → ganas material"),
-   sin desvelar las jugadas. Para apuntar aquí otra jugada, pulsa **"Añadir candidata"** y
+   sin desvelar las jugadas. Para apuntar aquí otra jugada, pulsa **«+ Candidata»** y
    muévela en el tablero: se apunta en la tabla (y cuenta como candidata en las estadísticas) sin
    jugarse; si ya tienes 5, quita antes una. Sin ese botón, una jugada en el tablero se juega
    directamente.
    Al jugar desde Decisión (o desde Comprobación) aparece **¿Qué permite mi jugada?**: la posición
-   tras tu jugada con el rival al turno; juegas la respuesta que más te preocupa o «No veo nada
-   peligroso» y la app revela los jaques, capturas, amenazas, mates e ideas forzadas del rival. Los
+   tras tu jugada con el rival al turno; juegas la respuesta que más te preocupa o «No veo
+   peligro» y la app revela los jaques, capturas, amenazas, mates e ideas forzadas del rival. Los
    avisos de la tabla solo se ven después de este paso.
 6. **Jugar** la línea contra las respuestas del puzzle. Al coronar, el tablero pregunta la pieza
    (dama, caballo, torre o alfil), como en Lichess: en una subpromoción hay que elegir la buena.
    Desde Intermedio, tras cada jugada correcta
    **predices la respuesta del rival** (no cuenta como error). Antes de cada jugada tuya, un
-   **barrido rápido** con los recuentos de jaques, capturas y amenazas. Con **«Introduce la línea
-   entera»** calculas a ciegas: el tablero no se mueve, respondes 2 o 3 preguntas sobre la posición
+   **barrido rápido** con los recuentos de jaques, capturas y amenazas. Con **«Línea a ciegas»** calculas a ciegas: el tablero no se mueve, respondes 2 o 3 preguntas sobre la posición
    final y la app marca la primera jugada que se aparta. Si fallas, la app dice **por qué**: orden
    equivocado, buena pieza en mala casilla, fallo de profilaxis, deja algo colgado u otra idea.
 7. **Repaso**: solución explicada paso a paso, temas, si la clave estaba entre tus candidatas y en

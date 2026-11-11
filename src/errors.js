@@ -47,7 +47,7 @@ export function classifyMistake(fen, uci, solution, ply, { maxMs = 250 } = {}) {
     const resource = idea
       ? `jugada ahora, el rival tiene una idea forzada: ${describeIdea(idea, { moves: true })}`
       : checks.length
-        ? `jugada ahora, el rival tiene ${checks.length} jaque(s) (${checks.slice(0, 3).map((m) => m.san).join(', ')}) y libertad para defenderse`
+        ? `jugada ahora, el rival tiene jaques (${checks.slice(0, 3).map((m) => m.san).join(', ')}) y tiempo para defenderse`
         : 'jugada ahora, el rival tiene tiempo para defenderse: la jugada que va antes le quita opciones';
     return { kind: 'orden', text: `${played.san} es buena idea, pero va después: primero ${expectedSan}. ${resource[0].toUpperCase()}${resource.slice(1)}.` };
   }

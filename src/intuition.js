@@ -13,10 +13,10 @@ export const CONFIDENCE = {
 
 /** Los cuatro casos del resumen (más "otra": fallaste y jugaste otra jugada errónea). */
 export const GLANCE_CASES = {
-  acertoJugo: { label: 'Acertó y la jugaste', text: 'Tu intuición vio la jugada y la confirmaste con el método.', tone: 'good' },
-  acertoCambio: { label: 'Acertó pero la cambiaste', text: 'Tu primera idea era buena y la abandonaste: revisa qué te hizo dudar.', tone: 'info' },
-  falloCorregido: { label: 'Falló y el método te corrigió', text: 'El proceso hizo su trabajo: encontró algo mejor que tu primera idea.', tone: 'good' },
-  falloJugo: { label: 'Falló y la jugaste', text: 'Te quedaste con la primera idea sin comprobarla: el método no llegó a corregirla.', tone: 'bad' },
+  acertoJugo: { label: 'Acertó y la jugaste', text: 'La viste y la confirmaste.', tone: 'good' },
+  acertoCambio: { label: 'Acertó pero la cambiaste', text: 'Era buena y la abandonaste: ¿qué te hizo dudar?', tone: 'info' },
+  falloCorregido: { label: 'Falló y el método te corrigió', text: 'El método encontró algo mejor.', tone: 'good' },
+  falloJugo: { label: 'Falló y la jugaste', text: 'Jugaste la primera idea sin comprobarla.', tone: 'bad' },
 };
 
 /**

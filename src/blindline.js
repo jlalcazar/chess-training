@@ -72,14 +72,14 @@ export function blindQuestions(startFen, ucis) {
   }
   // ¿Qué pieza rival queda indefensa? (sin rey; los peones solo si están atacados)
   const loose = unprotectedPieces(final, enemy).map((p) => p.square);
-  if (line.moves.length >= 2) out.push({ id: 'indefensa', kind: 'squares', text: '¿Qué pieza rival queda indefensa? (toca la casilla o pulsa «Ninguna»)', answer: loose });
+  if (line.moves.length >= 2) out.push({ id: 'indefensa', kind: 'squares', text: '¿Qué pieza rival queda indefensa?', answer: loose });
   // Material respecto al inicio.
   const diff = balance(final, hero) - balance(start, hero);
   out.push({ id: 'material', kind: 'choice', text: '¿Cómo va el material respecto a ahora?', options: { ganas: 'Ganas material', igual: 'Igual', pierdes: 'Pierdes material' }, answer: diff > 0 ? 'ganas' : diff < 0 ? 'pierdes' : 'igual', detail: diff });
   // ¿Queda algún jaque o captura para el rival?
   const rivalFen = final.turn() === enemy ? line.fen : withTurn(line.fen, enemy);
   const sweep = line.over ? { checks: [], captures: [] } : forcingSweep(rivalFen);
-  out.push({ id: 'pendiente', kind: 'yesno', text: '¿Le queda al rival algún jaque o captura?', answer: sweep.checks.length + sweep.captures.length > 0, detail: `${sweep.checks.length} jaque(s) y ${sweep.captures.length} captura(s)` });
+  out.push({ id: 'pendiente', kind: 'yesno', text: '¿Le queda al rival algún jaque o captura?', answer: sweep.checks.length + sweep.captures.length > 0, detail: `jaques: ${sweep.checks.length}, capturas: ${sweep.captures.length}` });
   // Como mucho 3: dónde está la pieza, el material y, alternando, la pieza indefensa o lo pendiente.
   if (out.length <= 3) return out;
   const pick = (id) => out.find((q) => q.id === id);

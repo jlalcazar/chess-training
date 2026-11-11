@@ -803,7 +803,7 @@ export function describeLine(fen, ucis) {
 
 /** Texto corto de una idea: "Qf1+ (da jaque) Kh2 Rf2+ (…) … → gana 4 puntos de material". */
 export function describeIdea(idea, { moves = true } = {}) {
-  const result = idea.mate ? 'mate' : `ganas ${idea.gain} punto(s) de material`;
+  const result = idea.mate ? 'mate' : `ganas material (+${idea.gain})`;
   if (!moves) {
     // Solo el patrón (sin desvelar las jugadas): "da jaque → ataque doble → …".
     const pattern = idea.line.filter((s) => s.by === 'you').map((s) => (s.notes[0] ?? 'jugada tranquila').replace(/ \(.*\)$/, ''));

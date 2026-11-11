@@ -39,7 +39,7 @@ export const LEVELS = {
     label: 'Intermedio',
     tacticalNote: 'Este proceso debería empezar a automatizarse.',
     strategic: ['debilidades', 'peorPieza', 'rival'],
-    strategicNote: 'Solo si son necesarias. Empieza a desarrollar "¿qué quiere mi rival?".',
+    strategicNote: 'Solo si son necesarias. Practica «¿qué quiere mi rival?».',
   },
   avanzado: {
     label: 'Avanzado',
@@ -56,19 +56,19 @@ export const LEVELS = {
 };
 
 export const MODES = {
-  tiempo: 'Con tiempo (proceso completo)',
-  apuro: 'Sin tiempo (intuición + comprobación)',
-  mixto: '¿Táctica o mejora? (con posiciones tranquilas)',
+  tiempo: 'Con tiempo',
+  apuro: 'Sin tiempo',
+  mixto: '¿Táctica o mejora?',
 };
 
 export const MAX_CANDIDATES = 5;
 export const INTUITION_SECONDS = 20;
 
 export const TACTICAL_QUESTIONS = [
-  { id: 'mate', text: '¿Hay mate en esta posición?', hint: 'Mira todos los jaques, tuyos y del rival.' },
-  { id: 'desprotegidas', text: '¿Hay piezas desprotegidas?', hint: 'Busca piezas sin ningún defensor, de los dos colores.' },
-  { id: 'amenazadas', text: '¿Hay piezas amenazadas en la posición?', hint: '¿Qué está atacado? ¿Por algo de menos valor? ¿Con más atacantes que defensores?' },
-  { id: 'geometria', text: '¿Hay piezas alineadas, a salto de caballo o a doble de peón?', hint: 'Clavadas, enfiladas, ataques dobles de caballo y de peón. Piensa también en ideas de dos o tres jugadas: un jaque que prepara un ataque doble.' },
+  { id: 'mate', text: '¿Hay mate?', hint: 'Mira todos los jaques, tuyos y del rival.' },
+  { id: 'desprotegidas', text: '¿Hay piezas desprotegidas?', hint: 'Sin ningún defensor, de los dos colores.' },
+  { id: 'amenazadas', text: '¿Hay piezas amenazadas?', hint: '¿Atacadas por algo de menos valor? ¿Más atacantes que defensores?' },
+  { id: 'geometria', text: '¿Hay piezas alineadas, a salto de caballo o a doble de peón?', hint: 'Clavadas, enfiladas y ataques dobles. También a dos jugadas: un jaque que prepara un doble.' },
 ];
 
 export const STRATEGIC_QUESTIONS = {
@@ -88,8 +88,8 @@ export const ENDGAME_QUESTIONS = {
 };
 
 export const NO_TIME_STEPS = [
-  { id: 'intuicion', text: 'Fíate de la intuición', hint: 'Elige una de las primeras jugadas que se te ocurran. No hay tiempo para buscar más.' },
-  { id: 'comprobacion', text: 'Comprueba que no te dejas nada', hint: 'Revisa la posición: ¿te dejas una pieza o un mate? Si no... adelante.' },
+  { id: 'intuicion', text: 'Intuición', hint: 'Mueve una de las primeras jugadas que se te ocurran. Aún no se juega.' },
+  { id: 'comprobacion', text: 'Comprueba', hint: '¿Te dejas una pieza o un mate? Si no, adelante.' },
 ];
 
 const list = (items) => items.join(', ');
@@ -126,7 +126,7 @@ export function answerQuestion(id, fen, hero, { maxMs = 400 } = {}) {
       for (const m of theirs) findings.push(finding(`El rival amenaza mate: ${m.san}`, [m.from, m.to], 'bad', { targets: [m.from, m.to], match: 'all', move: toUci(m) }));
       const checks = load(fen).moves({ verbose: true }).filter((m) => m.san.includes('+') && !m.san.endsWith('#'));
       if (!mine.length && checks.length) {
-        findings.push(finding(`No hay mate inmediato, pero tienes ${checks.length} jaque(s) para revisar: ${list(checks.map((m) => m.san))}`, checks.flatMap((m) => [m.from, m.to]), 'info'));
+        findings.push(finding(`Sin mate inmediato. Jaques para revisar: ${list(checks.map((m) => m.san))}`, checks.flatMap((m) => [m.from, m.to]), 'info'));
       }
       const ks = kingSafety(chess, enemy);
       if (ks && ks.shield <= 1) findings.push(finding(`El rey rival en ${ks.square} tiene poca protección de peones`, [ks.square], 'info'));
@@ -201,7 +201,7 @@ export function answerQuestion(id, fen, hero, { maxMs = 400 } = {}) {
       const ranked = worstPieces(fen, hero);
       if (ranked.length) {
         const w = ranked[0];
-        findings.push(finding(`Tu peor pieza parece ${pieceLabel(w)}: ${w.mobility} jugada(s), ${Math.round(w.ratio * 100)}% de su movilidad máxima`, [w.square], 'bad', { targets: [w.square] }));
+        findings.push(finding(`Tu peor pieza parece ${pieceLabel(w)} (jugadas: ${w.mobility}, el ${Math.round(w.ratio * 100)}% de su máximo)`, [w.square], 'bad', { targets: [w.square] }));
         for (const p of ranked.slice(1, 3)) findings.push(finding(`Después: ${pieceLabel(p)} (${p.mobility} jugadas, ${Math.round(p.ratio * 100)}% de su máximo)`, [p.square], 'info'));
       }
       return { yes: ranked.length > 0, findings };
@@ -216,8 +216,8 @@ export function answerQuestion(id, fen, hero, { maxMs = 400 } = {}) {
     case 'cambiosFinal': {
       const m = material(chess);
       const diff = m[hero] - m[enemy];
-      if (diff > 0) findings.push(finding(`Vas ${diff} punto(s) por delante en material: los cambios de piezas (no de peones) te favorecen`, [], 'good'));
-      else if (diff < 0) findings.push(finding(`Vas ${-diff} punto(s) por detrás: evita cambios, busca complicaciones`, [], 'bad'));
+      if (diff > 0) findings.push(finding(`Vas por delante en material (+${diff}): te convienen los cambios de piezas, no de peones`, [], 'good'));
+      else if (diff < 0) findings.push(finding(`Vas por detrás en material (−${-diff}): evita cambios, busca complicaciones`, [], 'bad'));
       else findings.push(finding('Material igualado: cambia tu peor pieza por la mejor del rival', [], 'info'));
       const ksMine = kingSafety(chess, hero);
       if (m.queens && ksMine && ksMine.shield <= 1) findings.push(finding('Tu rey está expuesto: cambiar damas reduce el peligro', [ksMine.square], 'info'));
