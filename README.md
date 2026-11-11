@@ -44,6 +44,14 @@ la mejor (0 % si es la del ejercicio). Si tu jugada no es la del puzzle pero pie
 fallo y ves cuánto («Error: pierdes 14 %»). El resumen muestra la pérdida media del ejercicio y
 Estadísticas, la pérdida media por jugada y su tendencia (últimas 20 frente a las 20 anteriores).
 
+### Posiciones sin táctica garantizada
+
+En el modo «Con tiempo», 1 de cada 4 ejercicios nuevos es una **posición tranquila** de la misma
+partida (comprobada con Stockfish), sin avisar: haces el proceso completo sin saber si hay táctica
+y, al jugar tu decisión, el motor la puntúa y te enseña las mejores jugadas. Se desactiva en
+Opciones → «Posiciones tranquilas». No se mezclan en el repaso, en los ciclos Woodpecker ni al
+cargar un puzzle concreto.
+
 Parámetros de URL útiles para depurar:
 
 - `?puzzle=S14en` carga un puzzle concreto de Lichess.

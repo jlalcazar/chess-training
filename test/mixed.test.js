@@ -37,3 +37,10 @@ test('combinaciones inventadas y tácticas no vistas', () => {
   assert.deepEqual(m.quiet, { n: 2, said: 1 });
   assert.deepEqual(m.quietMoves, { n: 2, good: 1 });
 });
+
+test('recordMixed: sin declaración solo cuenta la jugada de la posición tranquila', () => {
+  const b = recordMixed(null, { kind: 'quiet', declared: null, goodMove: true });
+  assert.equal(b.quiet.n, 0);
+  assert.equal(b.invented, 0);
+  assert.deepEqual(b.quietMoves, { n: 1, good: 1 });
+});

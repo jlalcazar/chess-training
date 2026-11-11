@@ -68,14 +68,17 @@ export const emptyMixed = () => ({ tactic: { n: 0, said: 0 }, quiet: { n: 0, sai
 
 /**
  * Registra una posición del modo mezcla: `kind` lo que era ('tactic' o
- * 'quiet'), `declared` lo que dijo el jugador y, en las tranquilas, si su
- * jugada fue buena según el motor.
+ * 'quiet'), `declared` lo que dijo el jugador (null si no se le preguntó) y,
+ * en las tranquilas, si su jugada fue buena según el motor.
  */
 export function recordMixed(block, { kind, declared, goodMove = null }) {
   const next = structuredClone(block ?? emptyMixed());
-  const k = next[kind];
-  k.n++;
-  if (declared === kind) k.said++;
+  // Sin declaración (posición tranquila dentro del proceso completo): solo cuenta la jugada.
+  if (declared != null) {
+    const k = next[kind];
+    k.n++;
+    if (declared === kind) k.said++;
+  }
   if (kind === 'quiet' && declared === 'tactic') next.invented++;
   if (kind === 'tactic' && declared === 'quiet') next.missed++;
   if (kind === 'quiet' && goodMove !== null) {

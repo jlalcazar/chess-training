@@ -64,8 +64,11 @@ const SETTING_DEFAULTS = {
   safetyCheck: true, // "¿Qué permite mi jugada?" antes de jugar
   scaffold: true, // ayuda que se retira por pregunta
   blindArrows: 'auto', // flechas de la línea a ciegas: auto = ocultas en Avanzado y Experto
+  quietMix: true, // modo «con tiempo»: 1 de cada 4 ejercicios es una posición sin táctica
   lichessUser: '',
 };
+// Proporción de posiciones tranquilas mezcladas en el modo «con tiempo».
+const QUIET_MIX_RATE = 0.25;
 const settings = { ...SETTING_DEFAULTS, ...storage.get('settings', {}) };
 let state = null;
 let timer = null;
@@ -81,13 +84,16 @@ function stopTimer() {
 
 function newState(puzzle, modeOverride = null, mixed = null) {
   const plan = questionPlan(puzzle.fen, settings.level);
-  const exerciseMode = modeOverride ?? (mixed ? 'mixto' : settings.mode === 'mixto' ? 'tiempo' : settings.mode);
+  // `mixed.full`: posición tranquila dentro del proceso completo (sin declarar antes si hay táctica).
+  const exerciseMode = modeOverride ?? (mixed && !mixed.full ? 'mixto' : settings.mode === 'mixto' ? 'tiempo' : settings.mode);
   return {
     puzzle,
     plan,
     mixed,
     mode: exerciseMode,
-    flow: mixed ? ['declarar', mixed.kind === 'quiet' ? 'mover' : 'resolver', 'resumen'] : flowFor(exerciseMode, puzzle),
+    flow: mixed?.full
+      ? flowFor('tiempo', puzzle).map((step) => (step === 'resolver' ? 'mover' : step))
+      : mixed ? ['declarar', mixed.kind === 'quiet' ? 'mover' : 'resolver', 'resumen'] : flowFor(exerciseMode, puzzle),
     step: null,
     candidates: [],
     addingCandidate: false, // en Decisión: el próximo movimiento en el tablero se apunta, no se juega
@@ -197,6 +203,7 @@ const OPTIONS = [
   { key: 'calcStep', label: 'Calcular siempre', help: 'Compara dos candidatas a ciegas antes de decidir.' },
   { key: 'lineSweep', label: 'Barrido en cada jugada', help: 'Cuántos jaques, capturas y amenazas hay, sin decir cuáles.' },
   { key: 'safetyCheck', label: '¿Qué permite mi jugada?', help: 'Antes de jugar, buscas la respuesta más peligrosa del rival.' },
+  { key: 'quietMix', label: 'Posiciones tranquilas', help: 'En «Con tiempo», 1 de cada 4 ejercicios no tiene táctica: toca mejorar la posición. No se avisa cuál.' },
   { key: 'scaffold', label: 'Ayuda que se retira', help: 'Las preguntas que dominas pasan a un chequeo de 30 s.' },
   { key: 'blindArrows', label: 'Flechas a ciegas', help: 'Dibuja la línea que introduces.', options: { auto: 'Según el nivel', on: 'Siempre', off: 'Nunca' } },
 ];
@@ -254,6 +261,14 @@ async function loadPuzzle(source, { srs = false, woodpecker = false, modeOverrid
           mixed.kind = 'quiet';
         }
       }
+    } else if (settings.mode === 'tiempo' && settings.quietMix && !source && !srs && !woodpecker && !modeOverride && Math.random() < QUIET_MIX_RATE) {
+      // Sin avisar: la misma pantalla de carga que un ejercicio con táctica.
+      const quiet = await findQuietPosition(puzzle);
+      if (request !== loadSeq) return;
+      if (quiet) {
+        exercise = quiet;
+        mixed = { kind: 'quiet', declared: null, full: true };
+      }
     }
     state = newState(exercise, modeOverride, mixed);
     state.woodpecker = woodpecker;
@@ -266,14 +281,15 @@ async function loadPuzzle(source, { srs = false, woodpecker = false, modeOverrid
     board.setInteractive(false);
     board.setMarks({});
     board.setArrows([]);
-    board.setPosition(puzzle.fenBefore, { orientation: puzzle.heroColor });
+    // La posición del ejercicio (puede ser una tranquila de la misma partida, no la del puzzle).
+    board.setPosition(exercise.fenBefore, { orientation: exercise.heroColor });
     const current = state;
     setTimeout(() => {
       if (state !== current) return;
-      board.setPosition(puzzle.fen, { orientation: puzzle.heroColor, lastMove: puzzle.lastMove });
+      board.setPosition(exercise.fen, { orientation: exercise.heroColor, lastMove: exercise.lastMove });
       render();
     }, 700);
-    panel.replaceChildren(h('p', { class: 'muted' }, `El rival juega ${puzzle.lastMove?.san ?? ''}…`));
+    panel.replaceChildren(h('p', { class: 'muted' }, `El rival juega ${exercise.lastMove?.san ?? ''}…`));
   } catch (err) {
     if (request !== loadSeq) return;
     console.error(err);
@@ -308,7 +324,7 @@ function render() {
   const done = state.step === 'resumen' || state.step === 'remate';
   const steps = state.flow.map((id) => [id, id === 'estrategia' && state.plan.endgame ? 'Final' : STEP_LABELS[id]]);
   // "¿Qué permite?" y el remate son pasos intermedios: se marcan sobre el paso más cercano.
-  const shown = { permite: 'resolver', remate: 'resumen' }[state.step] ?? state.step;
+  const shown = { permite: state.flow.includes('mover') ? 'mover' : 'resolver', remate: 'resumen' }[state.step] ?? state.step;
   const idx = steps.findIndex(([id]) => id === shown);
   const stepper = h('ol', { class: 'stepper' }, steps.map(([id, label], i) => h('li', { class: i < idx ? 'done' : i === idx ? 'current' : '' }, label)));
   // En el móvil, en lugar de todas las etiquetas: «Paso 3 de 7 · Táctica» y una barra de progreso.
@@ -324,7 +340,7 @@ function render() {
     h('div', {},
       h('span', { class: `side side-${puzzle.heroColor}` }, `Juegan ${COLOR_NAMES[puzzle.heroColor]}`),
       h('span', { class: 'muted' }, ` · Rival: ${puzzle.lastMove?.san}`),
-      h('span', { class: 'muted puzzle-id' }, ` · Puzzle ${puzzle.id}${done ? ` (${puzzle.rating})` : ''}`),
+      h('span', { class: 'muted puzzle-id' }, ` · Puzzle ${puzzle.quiet && !done ? puzzle.quiet.source : puzzle.id}${done ? ` (${puzzle.rating})` : ''}`),
     ),
     compactStep,
     nextButton(done),
@@ -1403,8 +1419,17 @@ function decision() {
 /** Primera jugada del ejercicio, desde Decisión o Comprobar (antes, «¿Qué permite?» si está activo). */
 function playFirstMove(move, from = state.step) {
   if (settings.safetyCheck) return startSafety(move, from);
+  playDecision(move);
+}
+
+/** Juega tu decisión: contra la solución del puzzle o, en una posición tranquila, corregida por el motor. */
+function playDecision(move) {
+  if (state.puzzle.quiet) {
+    go('mover');
+    return playQuietMove(move);
+  }
   go('resolver');
-  playUserMove(move);
+  return playUserMove(move);
 }
 
 // ---------------------------------------------- ¿qué permite mi jugada?
@@ -1518,8 +1543,7 @@ function leaveSafety(play) {
     state.safety = null;
     return go(sf.from);
   }
-  go('resolver');
-  playUserMove(sf.move);
+  playDecision(sf.move);
 }
 
 // ------------------------------------------------------- modo sin tiempo
@@ -3071,12 +3095,12 @@ function burstStats(raw) {
 /** Modo «¿hay táctica o toca mejorar?». */
 function mixedStats(raw) {
   const m = raw.mixed;
-  if (!m || !(m.tactic.n + m.quiet.n)) return null;
+  if (!m || !(m.tactic.n + m.quiet.n + m.quietMoves.n)) return null;
   return h('div', { class: 'stats-block' },
     h('h3', {}, '¿Táctica o mejora?'),
     h('ul', { class: 'blind-stats' },
-      h('li', {}, `Con táctica: la viste en ${m.tactic.said} de ${m.tactic.n}`, m.missed ? h('span', { class: 'ko' }, ` · ${m.missed} ${m.missed === 1 ? 'táctica no vista' : 'tácticas no vistas'}`) : null),
-      h('li', {}, `Tranquilas: lo reconociste en ${m.quiet.said} de ${m.quiet.n}`, m.invented ? h('span', { class: 'ko' }, ` · ${m.invented} ${m.invented === 1 ? 'combinación inventada' : 'combinaciones inventadas'}`) : null),
+      !m.tactic.n ? null : h('li', {}, `Con táctica: la viste en ${m.tactic.said} de ${m.tactic.n}`, m.missed ? h('span', { class: 'ko' }, ` · ${m.missed} ${m.missed === 1 ? 'táctica no vista' : 'tácticas no vistas'}`) : null),
+      !m.quiet.n ? null : h('li', {}, `Tranquilas: lo reconociste en ${m.quiet.said} de ${m.quiet.n}`, m.invented ? h('span', { class: 'ko' }, ` · ${m.invented} ${m.invented === 1 ? 'combinación inventada' : 'combinaciones inventadas'}`) : null),
       m.quietMoves.n ? h('li', {}, `Jugadas en posiciones tranquilas: ${m.quietMoves.good} de ${m.quietMoves.n} buenas.`) : null,
     ),
   );
@@ -3375,7 +3399,7 @@ function mover() {
   const q = state.quietMove;
   return h('section', {},
     h('h2', {}, `${stepNo('mover')}. Juega`),
-    q ? h('p', { class: 'muted' }, `Jugaste ${q.san}. Evaluando…`) : h('p', {}, state.mixed.declared === 'tactic' ? 'Dijiste «hay táctica»: juega la primera jugada.' : 'Dijiste «toca mejorar»: juega la que mejora tu posición.'),
+    q ? h('p', { class: 'muted' }, `Jugaste ${q.san}. Evaluando…`) : h('p', {}, state.mixed.declared === 'tactic' ? 'Dijiste «hay táctica»: juega la primera jugada.' : state.mixed.declared === 'quiet' ? 'Dijiste «toca mejorar»: juega la que mejora tu posición.' : 'Juega tu mejor jugada.'),
   );
 }
 
@@ -3427,12 +3451,20 @@ function resumenQuiet() {
   const { puzzle, mixed } = state;
   const q = state.quietMove;
   const top = puzzle.quiet.top.map((t) => ({ san: pvToSan(puzzle.fen, t.pv, 4), score: t.score }));
+  const bestNoted = state.candidates.some((c) => puzzle.quiet.top.some((t) => t.pv[0] === c.uci));
   return h('section', {},
     h('h2', {}, 'Era una posición tranquila'),
-    h('p', { class: mixed.declared === 'quiet' ? 'ok' : 'ko' }, mixed.declared === 'quiet'
-      ? 'Dijiste «toca mejorar»: bien, no había táctica.'
-      : 'Dijiste «hay táctica», pero no había: cuidado con inventar combinaciones.'),
+    mixed.declared == null
+      ? h('p', {}, 'Aquí no había táctica: tocaba mejorar la posición.')
+      : h('p', { class: mixed.declared === 'quiet' ? 'ok' : 'ko' }, mixed.declared === 'quiet'
+        ? 'Dijiste «toca mejorar»: bien, no había táctica.'
+        : 'Dijiste «hay táctica», pero no había: cuidado con inventar combinaciones.'),
     q ? h('p', {}, h('strong', {}, `Tu jugada: ${q.san} `), q.verdict ? h('span', { class: `badge tone-${q.verdict.tone}` }, q.verdict.label) : h('span', { class: 'muted' }, 'sin evaluación'), q.row ? ` (${formatScore(q.row.score)}, ${describeAdvantage(q.row.score)}${q.loss != null ? `; pierde ${Math.round(q.loss)} %` : ''})` : '') : null,
+    state.candidates.length
+      ? (bestNoted
+        ? h('p', { class: 'ok' }, '✔ Una de las mejores estaba entre tus candidatas.')
+        : h('p', { class: 'ko' }, '✘ Ninguna de las mejores estaba entre tus candidatas.'))
+      : null,
     h('div', { class: 'top-moves' }, h('strong', {}, 'Las mejores'), h('ol', {}, top.map((t) => h('li', {}, h('strong', {}, t.san[0]), ` ${formatScore(t.score)} `, h('span', { class: 'muted small' }, t.san.slice(1).join(' ')))))),
     h('p', { class: 'small' }, 'Aquí cuentan las preguntas estratégicas: debilidades, peor pieza y plan del rival.'),
     h('p', {}, h('a', { href: puzzle.gameUrl, target: '_blank', rel: 'noopener' }, 'Partida')),
