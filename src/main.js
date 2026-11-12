@@ -10,6 +10,7 @@ import { PHASE_NAMES, fixation, keyFirstSeen, phaseDurations } from './timeline.
 import { ERROR_INFO, classifyMistake, errorAdvice } from './errors.js';
 import { PROMOTION, STAGES, ladder, planQuestions, updateScaffold } from './scaffold.js';
 import { classifyMove, graphPaths } from './evalgraph.js';
+import { choiceSummary, distractorPool, pickOptions, recordChoice } from './choose.js';
 import { GOOD_LOSS, decisionLoss, decisionSummary, recordDecision } from './decisions.js';
 import { isQuietPosition, quietCandidates, quietReason, recordMixed } from './mixed.js';
 import { SELF_QUESTIONS, describeOwn, fetchUserGames, gameExercises, selfSummary } from './selfgames.js';
@@ -82,14 +83,16 @@ function stopTimer() {
   timer = null;
 }
 
-function newState(puzzle, modeOverride = null, mixed = null) {
+function newState(puzzle, modeOverride = null, mixed = null, choice = null) {
   const plan = questionPlan(puzzle.fen, settings.level);
   // `mixed.full`: posición tranquila dentro del proceso completo (sin declarar antes si hay táctica).
-  const exerciseMode = modeOverride ?? (mixed && !mixed.full ? 'mixto' : settings.mode === 'mixto' ? 'tiempo' : settings.mode);
+  // «¿Táctica o mejora?» y «Elegir jugada» solo valen para ejercicios nuevos: el repaso usa el proceso completo.
+  const exerciseMode = modeOverride ?? (choice ? 'elegir' : mixed && !mixed.full ? 'mixto' : ['mixto', 'elegir'].includes(settings.mode) ? 'tiempo' : settings.mode);
   return {
     puzzle,
     plan,
     mixed,
+    choice, // modo «Elegir jugada»: { kind, options, picked }
     mode: exerciseMode,
     flow: mixed?.full
       ? flowFor('tiempo', puzzle).map((step) => (step === 'resolver' ? 'mover' : step))
@@ -124,6 +127,7 @@ function track(type, data = {}) {
 
 /** Pasos del ejercicio según el modo y las opciones (se fijan al empezar). */
 function flowFor(mode, puzzle) {
+  if (mode === 'elegir') return ['elegir'];
   if (mode !== 'tiempo') return ['intuicion', 'comprobacion', 'resolver', 'resumen'];
   return [
     settings.whatChanged && puzzle.fenBefore && puzzle.lastMove && 'cambios',
@@ -134,7 +138,7 @@ function flowFor(mode, puzzle) {
   ].filter(Boolean);
 }
 
-const STEP_LABELS = { declarar: '¿Táctica o mejora?', mover: 'Jugar', cambios: '¿Qué cambió?', vistazo: 'Golpe de vista', candidatas: 'Candidatas', tactica: 'Táctica', estrategia: 'Estrategia', calculo: 'Calcular', decision: 'Decisión', permite: '¿Qué permite?', resolver: 'Jugar', resumen: 'Resumen', intuicion: 'Intuición', comprobacion: 'Comprobar' };
+const STEP_LABELS = { elegir: 'Elegir', declarar: '¿Táctica o mejora?', mover: 'Jugar', cambios: '¿Qué cambió?', vistazo: 'Golpe de vista', candidatas: 'Candidatas', tactica: 'Táctica', estrategia: 'Estrategia', calculo: 'Calcular', decision: 'Decisión', permite: '¿Qué permite?', resolver: 'Jugar', resumen: 'Resumen', intuicion: 'Intuición', comprobacion: 'Comprobar' };
 
 /** El paso que sigue a `step` en el flujo de este ejercicio. */
 function nextStep(step) {
@@ -270,7 +274,14 @@ async function loadPuzzle(source, { srs = false, woodpecker = false, modeOverrid
         mixed = { kind: 'quiet', declared: null, full: true };
       }
     }
-    state = newState(exercise, modeOverride, mixed);
+    let choice = null;
+    if (settings.mode === 'elegir' && !srs && !woodpecker && !modeOverride) {
+      choice = await prepareChoice(puzzle);
+      if (request !== loadSeq) return;
+      if (!choice) throw new Error('No se pudieron preparar las opciones con Stockfish.');
+      exercise = choice.exercise;
+    }
+    state = newState(exercise, modeOverride, mixed, choice);
     state.woodpecker = woodpecker;
     state.step = state.flow[0];
     savePool(puzzle);
@@ -321,14 +332,14 @@ function go(step) {
 function render() {
   if (!state) return;
   const { puzzle } = state;
-  const done = state.step === 'resumen' || state.step === 'remate';
+  const done = state.step === 'resumen' || state.step === 'remate' || Boolean(state.choice?.picked);
   const steps = state.flow.map((id) => [id, id === 'estrategia' && state.plan.endgame ? 'Final' : STEP_LABELS[id]]);
   // "¿Qué permite?" y el remate son pasos intermedios: se marcan sobre el paso más cercano.
   const shown = { permite: state.flow.includes('mover') ? 'mover' : 'resolver', remate: 'resumen' }[state.step] ?? state.step;
   const idx = steps.findIndex(([id]) => id === shown);
   const stepper = h('ol', { class: 'stepper' }, steps.map(([id, label], i) => h('li', { class: i < idx ? 'done' : i === idx ? 'current' : '' }, label)));
   // En el móvil, en lugar de todas las etiquetas: «Paso 3 de 7 · Táctica» y una barra de progreso.
-  const compactStep = idx >= 0
+  const compactStep = idx >= 0 && steps.length > 1
     ? h('div', { class: 'step-compact', title: steps.map(([, label]) => label).join(' → ') },
       h('div', { class: 'step-bar' }, h('div', { class: 'step-bar-fill', style: `width: ${Math.round(((idx + 1) / steps.length) * 100)}%` })),
       h('span', { class: 'muted small' }, `${idx + 1}/${steps.length}`))
@@ -346,10 +357,10 @@ function render() {
     nextButton(done),
   );
 
-  const views = { declarar, mover, cambios, vistazo, candidatas, tactica, estrategia, calculo, decision, permite, resolver, resumen, intuicion, comprobacion, remate };
-  const reminder = state.step !== 'resumen' && state.step !== 'remate' ? state.lastFail ??= lastFailNote() ?? false : null;
+  const views = { elegir, declarar, mover, cambios, vistazo, candidatas, tactica, estrategia, calculo, decision, permite, resolver, resumen, intuicion, comprobacion, remate };
+  const reminder = !['resumen', 'remate', 'elegir'].includes(state.step) ? state.lastFail ??= lastFailNote() ?? false : null;
   const own = state.puzzle.own && !reminder && state.step !== 'resumen' ? h('div', { class: 'last-fail' }, `${describeOwn(state.puzzle)}. Busca algo mejor.`) : null;
-  panel.replaceChildren(...[header, state.woodpecker ? woodpeckerLine() : null, stepper, reminder || own, views[state.step]()].filter(Boolean));
+  panel.replaceChildren(...[header, state.woodpecker ? woodpeckerLine() : null, steps.length > 1 ? stepper : null, reminder || own, views[state.step]()].filter(Boolean));
   state.notice = null;
   if (DEBUG) panel.append(h('details', { class: 'debug' }, h('summary', {}, 'Depuración'), h('pre', {}, JSON.stringify({ ...state, plan: undefined }, null, 2))));
   syncBoard();
@@ -385,6 +396,19 @@ function syncBoard() {
     board.setInteractive(f.status === 'playing' && !f.thinking);
     board.setArrows([]);
     board.setMarks({});
+    renderBoardNav();
+    return;
+  }
+  if (step === 'elegir') {
+    // Las opciones como flechas con su letra; tras elegir, verde la mejor y rojo las demás.
+    const c = state.choice;
+    board.setMoveFen(null);
+    board.setPosition(state.puzzle.fen, { orientation: state.puzzle.heroColor, lastMove: state.puzzle.lastMove });
+    board.setInteractive(false);
+    board.setPickMode(false);
+    board.setMarks({});
+    board.setArrows(c.options.map((o, i) => ({ from: o.uci.slice(0, 2), to: o.uci.slice(2, 4), label: 'ABC'[i], tone: !c.picked ? 'candidate' : o.best ? 'good' : o === c.picked ? 'bad' : 'muted' })));
+    renderBoardMode();
     renderBoardNav();
     return;
   }
@@ -471,6 +495,8 @@ function clickMode() {
       return { kind: 'move', text: 'Contra Stockfish' };
     case 'mover':
       return state.quietMove ? { kind: 'none', text: 'Tablero quieto' } : { kind: 'move', text: 'Se juega' };
+    case 'elegir':
+      return { kind: 'none', text: 'Elige con los botones' };
     case 'resumen':
       return { kind: 'none', text: 'Navega con los botones' };
     default:
@@ -3004,7 +3030,7 @@ function statsView() {
   const raw = storage.get('stats', emptyStats());
   const summary = summarize(raw);
   const { rows, hardest, exercises, candidates, blindSpots: blind, hints } = summary;
-  const extra = [decisionStats(raw), intuitionStats(summary.intuition), errorStats(summary), keySourceStats(summary), predictionStats(summary.predictions), ladderStats(raw), burstStats(raw), mixedStats(raw)].filter(Boolean);
+  const extra = [decisionStats(raw), choiceStats(raw), intuitionStats(summary.intuition), errorStats(summary), keySourceStats(summary), predictionStats(summary.predictions), ladderStats(raw), burstStats(raw), mixedStats(raw)].filter(Boolean);
   if (!rows.length) {
     return h('div', {}, h('p', {}, 'Aún no hay datos: termina un ejercicio «con tiempo» respondiendo a las preguntas.'), ...extra);
   }
@@ -3075,6 +3101,18 @@ function decisionStats(raw) {
     h('p', { class: 'callout' }, h('strong', {}, `Pérdida media: ${d.avg.toFixed(1)} %`), ` en ${count(d.n, 'jugada')}`),
     h('p', { class: 'small' }, `Últimas ${d.lastN}: ${d.last.toFixed(1)} %${d.before == null ? '' : ` (antes ${d.before.toFixed(1)} %${trend})`} · buenas: ${pct(d.goodRate)}`),
     h('p', { class: 'muted small' }, `Probabilidad de ganar que pierde cada jugada tuya frente a la mejor de Stockfish. Hasta ${GOOD_LOSS} % es buena.`),
+  );
+}
+
+/** Modo «Elegir jugada»: acierto total y por tipo de posición. */
+function choiceStats(raw) {
+  const c = choiceSummary(raw.choices);
+  if (!c) return null;
+  const part = (label, x) => (x.n ? `${label}: ${x.ok} de ${x.n}` : null);
+  return h('div', { class: 'stats-block' },
+    h('h3', {}, 'Elegir jugada'),
+    h('p', { class: 'small' }, h('strong', {}, `Aciertos: ${c.n ? pct(c.rate) : '—'}`), ` (${count(c.n, 'posición', 'posiciones')}) · últimas ${c.lastN}: ${pct(c.last)}`),
+    h('p', { class: 'small muted' }, [part('Con táctica', c.tactic), part('Tranquilas', c.quiet)].filter(Boolean).join(' · ')),
   );
 }
 
@@ -3468,6 +3506,86 @@ function resumenQuiet() {
     h('div', { class: 'top-moves' }, h('strong', {}, 'Las mejores'), h('ol', {}, top.map((t) => h('li', {}, h('strong', {}, t.san[0]), ` ${formatScore(t.score)} `, h('span', { class: 'muted small' }, t.san.slice(1).join(' ')))))),
     h('p', { class: 'small' }, 'Aquí cuentan las preguntas estratégicas: debilidades, peor pieza y plan del rival.'),
     h('p', {}, h('a', { href: puzzle.gameUrl, target: '_blank', rel: 'noopener' }, 'Partida')),
+    h('div', { class: 'actions' }, nextButton(true)),
+  );
+}
+
+// ------------------------------------------------ modo «Elegir jugada»
+
+/**
+ * Prepara un ejercicio de elegir: la posición (la del puzzle o, la mitad de
+ * las veces, una tranquila de la misma partida), la mejor jugada y dos
+ * distractores tentadores que Stockfish confirma que pierden. Null si no sale.
+ */
+async function prepareChoice(puzzle) {
+  try {
+    engine ??= new StockfishEngine();
+    let exercise = puzzle;
+    let kind = 'tactic';
+    if (Math.random() < 0.5) {
+      const quiet = await findQuietPosition(puzzle);
+      if (quiet) {
+        exercise = quiet;
+        kind = 'quiet';
+      }
+    }
+    const { fen } = exercise;
+    const bestUci = exercise.solution[0];
+    const root = await engine.evaluate(fen, { depth: 12, multipv: 3 });
+    const top = root.top ?? [];
+    const best = top.find((t) => t.pv[0] === bestUci) ?? (await engine.evaluate(fen, { depth: 12, move: bestUci }));
+    // Las otras mejores del motor que casi no pierden no sirven ni de respuesta ni de distractor.
+    const alsoGood = top.filter((t) => t.pv[0] !== bestUci && decisionLoss(best.score, t.score) < GOOD_LOSS).map((t) => t.pv[0]);
+    const pool = distractorPool(fen, [bestUci, ...alsoGood], { first: top.map((t) => t.pv[0]), max: 6 });
+    const graded = [];
+    for (const { uci, forcing } of pool) {
+      const r = await engine.evaluate(fen, { depth: 12, move: uci });
+      graded.push({ uci, forcing, score: r.score, pv: r.pv, loss: decisionLoss(best.score, r.score) });
+    }
+    const options = pickOptions({ uci: bestUci, score: best.score, pv: best.pv }, graded);
+    if (!options) return null;
+    for (const o of options) o.san = pvToSan(fen, [o.uci], 1)[0] ?? o.uci;
+    log('choice', { kind, options });
+    return { exercise, kind, options, picked: null };
+  } catch (err) {
+    console.error(err);
+    return null;
+  }
+}
+
+function elegir() {
+  const c = state.choice;
+  const { puzzle } = state;
+  if (!c.picked) {
+    const pick = (o) => {
+      c.picked = o;
+      c.ms = Date.now() - state.startedAt;
+      state.finished = true;
+      addDecision(o.loss);
+      const stats = storage.get('stats', emptyStats());
+      storage.set('stats', { ...stats, choices: recordChoice(stats.choices, { ok: o.best, kind: c.kind }) });
+      render();
+    };
+    return h('section', {},
+      h('h2', {}, '¿Cuál es la mejor jugada?'),
+      h('div', { class: 'actions choice-options' }, c.options.map((o, i) => h('button', { 'data-key': String(i + 1), onClick: () => pick(o) }, `${'ABC'[i]} · ${o.san}`))),
+    );
+  }
+  const best = c.options.find((o) => o.best);
+  const key = evaluateMove(puzzle.fen, uciToMove(best.uci));
+  return h('section', {},
+    h('h2', {}, c.picked.best ? `✔ ${best.san} es la mejor` : `✘ La mejor era ${best.san}`),
+    c.picked.best ? null : h('p', { class: 'ko' }, `${c.picked.san} pierde ${Math.round(c.picked.loss)} % de probabilidad de ganar.`),
+    h('p', { class: 'muted small' }, c.kind === 'quiet' ? 'Posición tranquila: no había táctica.' : 'Había táctica.'),
+    h('ul', { class: 'choice-list' }, c.options.map((o, i) => {
+      const line = pvToSan(puzzle.fen, o.pv, 4);
+      return h('li', { class: o.best ? 'ok' : o === c.picked ? 'ko' : '' },
+        h('strong', {}, `${'ABC'[i]} · ${o.san} `),
+        o.best
+          ? `mejor (${formatScore(o.score)})${key?.tags.length ? `: ${key.tags.map((t) => t.text).join('; ')}` : ''}`
+          : `pierde ${Math.round(o.loss)} % (${formatScore(o.score)})${line.length > 1 ? `: el rival responde ${line.slice(1).join(' ')}` : ''}`);
+    })),
+    h('p', {}, h('a', { href: puzzle.puzzleUrl, target: '_blank', rel: 'noopener' }, 'Ver en Lichess')),
     h('div', { class: 'actions' }, nextButton(true)),
   );
 }

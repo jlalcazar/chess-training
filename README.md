@@ -52,6 +52,15 @@ y, al jugar tu decisión, el motor la puntúa y te enseña las mejores jugadas. 
 Opciones → «Posiciones tranquilas». No se mezclan en el repaso, en los ciclos Woodpecker ni al
 cargar un puzzle concreto.
 
+### Modo «Elegir jugada»
+
+Se activa en el menú superior: **Modo → «Elegir jugada»**. Cada ejercicio muestra la posición con
+tres jugadas (flechas A, B y C) y tres botones: tocas la que crees mejor y ves al momento cuánto
+pierde cada una y cómo responde el rival a las malas. La mitad de las posiciones son del puzzle
+(hay táctica) y la otra mitad, tranquilas de la misma partida. Las opciones malas son jugadas
+tentadoras (un jaque o captura que no funciona y la que menos pierde) comprobadas con Stockfish.
+Cuenta en «Tus decisiones» y tiene su bloque en Estadísticas; no entra en temas ni en el repaso.
+
 Parámetros de URL útiles para depurar:
 
 - `?puzzle=S14en` carga un puzzle concreto de Lichess.

@@ -59,6 +59,7 @@ export const MODES = {
   tiempo: 'Con tiempo',
   apuro: 'Sin tiempo',
   mixto: '¿Táctica o mejora?',
+  elegir: 'Elegir jugada',
 };
 
 export const MAX_CANDIDATES = 5;

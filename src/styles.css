@@ -556,3 +556,11 @@ table.decision tbody tr { cursor: pointer; }
   .pick-help { display: none; }
   .pointing p.small { margin: 4px 0; }
 }
+
+/* ------------------------------------------------ modo «Elegir jugada» */
+.choice-options button { flex: 1 1 0; font-weight: 600; }
+.choice-list { list-style: none; padding: 0; margin: 8px 0; }
+.choice-list li { padding: 6px 0; border-bottom: 1px solid var(--border); font-weight: 400; }
+.arrow-label-good circle { fill: #2f8f46; }
+.arrow-label-bad circle { fill: #c0392b; }
+.arrow-label-muted circle { fill: #888; }
