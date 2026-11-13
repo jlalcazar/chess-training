@@ -564,3 +564,11 @@ table.decision tbody tr { cursor: pointer; }
 .arrow-label-good circle { fill: #2f8f46; }
 .arrow-label-bad circle { fill: #c0392b; }
 .arrow-label-muted circle { fill: #888; }
+
+/* ------------------------------------------------ de pregunta a candidata y «Tu hilo» */
+.link-ask { border-left: 4px solid var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); padding: 6px 12px; margin: 8px 0; border-radius: 2px; }
+.thread { border: 2px solid var(--accent); border-radius: 8px; padding: 8px 12px; margin: 10px 0; }
+.thread-head { display: flex; justify-content: space-between; align-items: center; }
+.thread ul { list-style: none; padding: 0; margin: 6px 0; }
+.thread li { padding: 3px 0; font-weight: 400; }
+.thread p { margin: 4px 0; }

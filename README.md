@@ -61,6 +61,16 @@ pierde cada una y cómo responde el rival a las malas. La mitad de las posicione
 tentadoras (un jaque o captura que no funciona y la que menos pierde) comprobadas con Stockfish.
 Cuenta en «Tus decisiones» y tiene su bloque en Estadísticas; no entra en temas ni en el repaso.
 
+### Seguir el hilo del método
+
+- **De pregunta a candidata.** Cuando una pregunta encuentra algo, «Siguiente» queda bloqueado hasta
+  que muevas en el tablero la candidata que sale de ahí (si ya la tenías, vuelve a moverla y queda
+  enlazada) o pulses «Ninguna». Se desactiva en Opciones → «De pregunta a candidata».
+- **Tu hilo.** El resumen muestra los tres eslabones de la jugada clave —**ver** (una pregunta la
+  señalaba y la respondiste bien), **apuntar** (estaba entre tus candidatas) y **elegir** (fue la que
+  jugaste)—, dónde se rompió y una nota de 0 a 100. Estadísticas abre con la nota media y el
+  eslabón que más se rompe. Solo en el modo «Con tiempo».
+
 Parámetros de URL útiles para depurar:
 
 - `?puzzle=S14en` carga un puzzle concreto de Lichess.

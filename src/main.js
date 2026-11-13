@@ -11,6 +11,7 @@ import { ERROR_INFO, classifyMistake, errorAdvice } from './errors.js';
 import { PROMOTION, STAGES, ladder, planQuestions, updateScaffold } from './scaffold.js';
 import { classifyMove, graphPaths } from './evalgraph.js';
 import { choiceSummary, distractorPool, pickOptions, recordChoice } from './choose.js';
+import { THREAD_STAGES, recordThread, threadReport, threadSummary } from './thread.js';
 import { GOOD_LOSS, decisionLoss, decisionSummary, recordDecision } from './decisions.js';
 import { isQuietPosition, quietCandidates, quietReason, recordMixed } from './mixed.js';
 import { SELF_QUESTIONS, describeOwn, fetchUserGames, gameExercises, selfSummary } from './selfgames.js';
@@ -65,6 +66,7 @@ const SETTING_DEFAULTS = {
   safetyCheck: true, // "¿Qué permite mi jugada?" antes de jugar
   scaffold: true, // ayuda que se retira por pregunta
   blindArrows: 'auto', // flechas de la línea a ciegas: auto = ocultas en Avanzado y Experto
+  linkCandidates: true, // de pregunta a candidata: cada hallazgo, una jugada apuntada (o «Ninguna»)
   quietMix: true, // modo «con tiempo»: 1 de cada 4 ejercicios es una posición sin táctica
   lichessUser: '',
 };
@@ -207,6 +209,7 @@ const OPTIONS = [
   { key: 'calcStep', label: 'Calcular siempre', help: 'Compara dos candidatas a ciegas antes de decidir.' },
   { key: 'lineSweep', label: 'Barrido en cada jugada', help: 'Cuántos jaques, capturas y amenazas hay, sin decir cuáles.' },
   { key: 'safetyCheck', label: '¿Qué permite mi jugada?', help: 'Antes de jugar, buscas la respuesta más peligrosa del rival.' },
+  { key: 'linkCandidates', label: 'De pregunta a candidata', help: 'Si una pregunta encuentra algo, apuntas la candidata que sale de ahí (o «Ninguna») antes de seguir.' },
   { key: 'quietMix', label: 'Posiciones tranquilas', help: 'En «Con tiempo», 1 de cada 4 ejercicios no tiene táctica: toca mejorar la posición. No se avisa cuál.' },
   { key: 'scaffold', label: 'Ayuda que se retira', help: 'Las preguntas que dominas pasan a un chequeo de 30 s.' },
   { key: 'blindArrows', label: 'Flechas a ciegas', help: 'Dibuja la línea que introduces.', options: { auto: 'Según el nivel', on: 'Siempre', off: 'Nunca' } },
@@ -316,6 +319,7 @@ async function loadPuzzle(source, { srs = false, woodpecker = false, modeOverrid
 function go(step) {
   stopTimer();
   state.pointing = null;
+  state.linkQ = null;
   state.controlShown = false;
   board.setTints({});
   board.setLabels({});
@@ -1081,6 +1085,11 @@ function questionView(questions, title, intro, onDone, surprise = null) {
   }
   const answer = state.answers[q.id];
   const pointing = settings.pointAnswers && POINTABLE.has(q.id);
+  // De pregunta a candidata: si el análisis encuentra algo, hay que apuntar la jugada que sale de ahí.
+  const link = state.links?.[q.id];
+  const mustLink = Boolean(answer) && settings.linkCandidates && answer.result.yes;
+  const needLink = mustLink && !(link?.ucis.length || link?.none);
+  state.linkQ = mustLink ? q.id : null;
   const children = [
     h('h2', {}, `${title} · ${state.questionIndex + 1}/${questions.length}`),
     // La nota del nivel, solo en la primera pregunta.
@@ -1171,8 +1180,12 @@ function questionView(questions, title, intro, onDone, surprise = null) {
         : 'Toca una línea para verla. Verde: a tu favor. Rojo: peligro.'),
       q.id === 'debilidades' ? controlMapView() : null,
       ROUTE_QUESTIONS.has(q.id) ? routeView(q.id) : null,
+      !mustLink ? null : needLink
+        ? h('p', { class: 'link-ask' }, h('strong', {}, '¿Qué candidata sale de aquí? '), 'Muévela en el tablero.')
+        : h('p', { class: 'small ok' }, link.none ? 'De aquí no sale ninguna candidata.' : `De aquí sale: ${link.ucis.map((u) => state.candidates.find((c) => c.uci === u)?.san).filter(Boolean).join(', ') || '—'}`),
       h('div', { class: 'actions' },
-        h('button', { class: 'primary', 'data-key': 'enter', onClick: () => { state.questionIndex++; state.routeShown = null; board.setMarks({}); board.setTints({}); board.setLabels({}); render(); } }, state.questionIndex + 1 < questions.length ? 'Siguiente' : 'Seguir'),
+        needLink ? h('button', { 'data-key': 'n', onClick: () => { (state.links ??= {})[q.id] = { ucis: [], none: true }; track('link', { q: q.id, none: true }); render(); } }, 'Ninguna') : null,
+        h('button', { class: 'primary', 'data-key': 'enter', disabled: needLink, onClick: () => { state.questionIndex++; state.routeShown = null; board.setMarks({}); board.setTints({}); board.setLabels({}); render(); } }, state.questionIndex + 1 < questions.length ? 'Siguiente' : 'Seguir'),
       ),
     );
   }
@@ -1329,6 +1342,7 @@ function estrategia() {
  */
 function quickCheckView(group, plan, title, onDone) {
   stopTimer();
+  state.linkQ = null;
   state.quickStarted ??= {};
   state.quickStarted[group] ??= Date.now();
   const left = Math.max(0, 30 - Math.round((Date.now() - state.quickStarted[group]) / 1000));
@@ -1630,7 +1644,19 @@ function onBoardMove(move) {
     case 'tactica':
     case 'estrategia':
       // La lista queda debajo de la pregunta: un aviso confirma que se apuntó (y que no se jugó).
-      if (addCandidate(move)) state.notice = `${state.candidates.at(-1).san} apuntada como candidata.`;
+      {
+        const added = addCandidate(move);
+        const c = added ? state.candidates.at(-1) : state.candidates.find((x) => x.uci === toUci(withPromotion(move)) || x.uci === toUci(move));
+        if (added) state.notice = `${c.san} apuntada como candidata.`;
+        if (c && state.linkQ) {
+          const l = ((state.links ??= {})[state.linkQ] ??= { ucis: [], none: false });
+          if (!l.ucis.includes(c.uci)) l.ucis.push(c.uci);
+          l.none = false;
+          c.fromQ ??= state.linkQ;
+          if (!added) state.notice = `${c.san} ya estaba apuntada: queda enlazada con esta pregunta.`;
+          track('link', { q: state.linkQ, uci: c.uci });
+        }
+      }
       return render();
     case 'vistazo': {
       if (state.glance) return undefined;
@@ -2197,7 +2223,10 @@ function applyBlind() {
   for (let i = 0; i < until; i++) {
     const m = chess.move(uciToMove(ucis[i]));
     if (m.color !== state.puzzle.heroColor) state.predictions.push({ ply: state.ply, uci: ucis[i], san: m.san, ok: true, blind: true });
-    else addDecision(0);
+    else {
+      if (state.ply === 0) state.firstPlayed ??= ucis[i];
+      addDecision(0);
+    }
     track('move', { uci: ucis[i], ply: state.ply, ok: true, blind: true });
     state.ply++;
     state.playFen = chess.fen();
@@ -2286,6 +2315,17 @@ function finish(solved) {
     errors: state.mistakes.map((m) => m.kind).filter(Boolean),
     predictions: { ok: state.predictions.filter((p) => p.ok).length, total: state.predictions.length },
   }));
+  if (mode() === 'tiempo') {
+    // Tu hilo: ¿viste lo que señalaba la clave?, ¿la apuntaste?, ¿la elegiste?
+    const pointing = (key ? [...new Set(key.tags.map((t) => t.q))] : []).filter((q) => state.answers[q]?.result.yes);
+    const seen = pointing.filter((q) => {
+      const a = state.answers[q];
+      return a.pointed ? a.pointed.found > 0 : a.user === true;
+    });
+    state.thread = threadReport({ pointing, seen, noneAt: pointing.filter((q) => state.links?.[q]?.none), noted: state.keyInCandidates, chosen: state.firstPlayed === keyUci });
+    const stats = storage.get('stats', emptyStats());
+    storage.set('stats', { ...stats, thread: recordThread(stats.thread, state.thread) });
+  }
   if (settings.scaffold && mode() === 'tiempo') updateLadder(key, keyUci);
   if (state.mixed) recordMixedStat({ kind: 'tactic', declared: state.mixed.declared });
   saveProgress(state.success);
@@ -2428,6 +2468,7 @@ function resumen() {
     h('h2', {}, state.success ? '¡Resuelto!' : state.solved ? 'Resuelto con pistas' : state.mistakes.length && !state.revealed ? 'Resuelto con errores' : 'Solución vista'),
     h('p', {}, h('strong', {}, 'Solución: '), line),
     h('p', {}, h('strong', {}, `Clave ${key.san}: `), key.tags.length ? key.tags.map((t) => t.text).join('; ') : 'jugada tranquila: cuentan las preguntas estratégicas.'),
+    threadView(),
     changeSummary(),
     lineView(),
     themesView(),
@@ -2436,7 +2477,7 @@ function resumen() {
     processPanel(),
     ladderNote(),
     mode() === 'tiempo'
-      ? h('p', { class: state.keyInCandidates ? 'ok' : 'ko' }, state.keyInCandidates ? '✔ La clave estaba entre tus candidatas.' : '✘ La clave no estaba entre tus candidatas: ¿qué pregunta te habría llevado a ella?')
+      ? null
       : mode() === 'apuro'
         ? h('p', { class: state.keyInCandidates ? 'ok' : 'ko' }, state.keyInCandidates ? 'Tu intuición acertó.' : `Tu intuición fue ${state.intuition?.san ?? '—'}.`)
         : null,
@@ -2456,6 +2497,33 @@ function resumen() {
     engineSection(),
     // Al final del resumen (y en la barra del móvil): el siguiente ejercicio.
     h('div', { class: 'actions' }, nextButton(true)),
+  );
+}
+
+/** «Tu hilo»: los tres eslabones de la jugada clave (ver, apuntar, elegir) y dónde se rompió. */
+function threadView() {
+  const t = state.thread;
+  if (!t) return null;
+  const names = (ids) => ids.map((id) => `«${questionText(id)}»`).join(', ');
+  const keyUci = state.puzzle.solution[0];
+  const cand = state.candidates.find((c) => c.uci === keyUci);
+  const played = state.mistakes.find((m) => m.ply === 0)?.san;
+  const row = (ok, label, text) => h('li', { class: ok === null ? 'muted' : ok ? 'ok' : 'ko' }, `${ok === null ? '—' : ok ? '✔' : '✘'} `, h('strong', {}, `${label}: `), text);
+  const verdictText = {
+    ver: 'El hilo se rompió al mirar: la pregunta señalaba la clave y no lo viste.',
+    apuntar: t.stages.ver ? 'Lo viste y no lo convertiste en candidata: cada hallazgo, una jugada.' : 'La clave no salió de tus preguntas ni de tu intuición.',
+    elegir: 'La tenías apuntada y elegiste otra: compara antes de jugar.',
+  }[t.brokeAt] ?? 'Hilo completo: la viste, la apuntaste y la elegiste.';
+  return h('div', { class: 'thread' },
+    h('div', { class: 'thread-head' }, h('strong', {}, 'Tu hilo'), h('span', { class: `badge tone-${t.brokeAt ? (t.score >= 50 ? 'info' : 'bad') : 'good'}` }, `Nota ${t.score}`)),
+    h('ul', {},
+      row(t.stages.ver, THREAD_STAGES.ver, t.stages.ver === null ? 'ninguna pregunta táctica señalaba la clave' : t.stages.ver ? names(t.seen) : `no viste ${names(t.pointing)}`),
+      row(t.stages.apuntar, THREAD_STAGES.apuntar, t.stages.apuntar
+        ? (cand?.source === 'intuicion' ? 'por intuición' : cand?.fromQ ? `desde ${names([cand.fromQ])}` : 'entre tus candidatas')
+        : `no era candidata${t.noneAt.length ? ` (marcaste «Ninguna» en ${names(t.noneAt)})` : ''}`),
+      row(t.stages.elegir, THREAD_STAGES.elegir, t.stages.elegir ? 'la jugaste' : played ? `jugaste ${played}` : 'no la jugaste'),
+    ),
+    h('p', { class: t.brokeAt ? 'ko small' : 'ok small' }, verdictText),
   );
 }
 
@@ -3030,13 +3098,16 @@ function statsView() {
   const raw = storage.get('stats', emptyStats());
   const summary = summarize(raw);
   const { rows, hardest, exercises, candidates, blindSpots: blind, hints } = summary;
-  const extra = [decisionStats(raw), choiceStats(raw), intuitionStats(summary.intuition), errorStats(summary), keySourceStats(summary), predictionStats(summary.predictions), ladderStats(raw), burstStats(raw), mixedStats(raw)].filter(Boolean);
+  // Lo primero: cómo sigues el método y la calidad de tus jugadas.
+  const lead = [threadStats(raw), decisionStats(raw)].filter(Boolean);
+  const extra = [choiceStats(raw), intuitionStats(summary.intuition), errorStats(summary), keySourceStats(summary), predictionStats(summary.predictions), ladderStats(raw), burstStats(raw), mixedStats(raw)].filter(Boolean);
   if (!rows.length) {
-    return h('div', {}, h('p', {}, 'Aún no hay datos: termina un ejercicio «con tiempo» respondiendo a las preguntas.'), ...extra);
+    return h('div', {}, ...lead, h('p', {}, 'Aún no hay datos por pregunta: termina un ejercicio «con tiempo» respondiendo a las preguntas.'), ...extra);
   }
   const closed = rows.filter((r) => !r.open);
   const open = rows.filter((r) => r.open);
   return h('div', {},
+    ...lead,
     h('p', { class: 'muted small' }, `${count(exercises, 'ejercicio terminado', 'ejercicios terminados')}.`),
     hardest
       ? h('div', { class: 'callout' },
@@ -3101,6 +3172,23 @@ function decisionStats(raw) {
     h('p', { class: 'callout' }, h('strong', {}, `Pérdida media: ${d.avg.toFixed(1)} %`), ` en ${count(d.n, 'jugada')}`),
     h('p', { class: 'small' }, `Últimas ${d.lastN}: ${d.last.toFixed(1)} %${d.before == null ? '' : ` (antes ${d.before.toFixed(1)} %${trend})`} · buenas: ${pct(d.goodRate)}`),
     h('p', { class: 'muted small' }, `Probabilidad de ganar que pierde cada jugada tuya frente a la mejor de Stockfish. Hasta ${GOOD_LOSS} % es buena.`),
+  );
+}
+
+/** «Tu hilo»: nota media del método y en qué eslabón se rompe más. */
+function threadStats(raw) {
+  const t = threadSummary(raw.thread);
+  if (!t) return null;
+  const advice = {
+    ver: 'Lo que más falla es ver: responde señalando en el tablero para mirar de verdad.',
+    apuntar: 'Lo que más falla es apuntar: cada cosa que encuentres, conviértela en candidata.',
+    elegir: 'Lo que más falla es elegir: compara tus candidatas antes de jugar.',
+  }[t.worst];
+  return h('div', { class: 'stats-block' },
+    h('h3', {}, 'Tu hilo'),
+    h('p', { class: 'callout' }, h('strong', {}, `Nota media: ${Math.round(t.avg)}`), ` en ${count(t.n, 'ejercicio')} · últimos ${t.lastN}: ${Math.round(t.last)}`),
+    h('p', { class: 'small' }, `Completo: ${t.complete} · se rompe al ver: ${t.broke.ver} · al apuntar: ${t.broke.apuntar} · al elegir: ${t.broke.elegir}`),
+    advice ? h('p', { class: 'small muted' }, advice) : null,
   );
 }
 
